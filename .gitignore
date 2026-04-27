@@ -1,0 +1,9 @@
+node_modules/
+secrets/
+.env
+.env.*
+.env.local
+*.log
+.DS_Store
+chase_csv/
+csv/

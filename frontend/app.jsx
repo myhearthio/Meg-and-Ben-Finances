@@ -14,6 +14,7 @@ const FAMILY_CATS = [
   { key: "transportation", label: "Transportation" },
   { key: "health", label: "Health" },
   { key: "shopping", label: "Shopping" },
+  { key: "kids_activities", label: "Children's Activities" },
   { key: "travel", label: "Travel & Vacation" },
   { key: "entertainment", label: "Entertainment & Subscriptions" },
   { key: "gifts_charity", label: "Gifts & Charity" },

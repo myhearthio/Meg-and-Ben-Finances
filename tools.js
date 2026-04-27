@@ -151,7 +151,7 @@ async function t_find_transactions(input, snap) {
   const df = input.date_from, dt = input.date_to;
   const mask = input.mask;
   const limit = input.limit ? Math.max(1, input.limit) : Infinity;
-  const yr = String(new Date().getFullYear());
+  const yr = String(Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());
 
   const hits = [];
   for (const t of tx) {
@@ -192,7 +192,7 @@ async function t_get_category_breakdown(input, snap) {
   const requestedCat = input.category;
   const tx = snap._plaidTx || [];
   const txOv = ov.__tx || {};
-  const yr = String(new Date().getFullYear());
+  const yr = String(Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());
 
   let total = 0, count = 0;
   const byMonth = {};
@@ -235,7 +235,7 @@ async function t_get_top_expenses(input, snap) {
   const txOv = ov.__tx || {};
   const limit = Math.min(input.limit || 10, 50);
   const groupBy = input.group_by || "vendor";
-  const yr = String(new Date().getFullYear());
+  const yr = String(Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());
 
   let df = input.date_from, dt = input.date_to;
   if (input.month) {

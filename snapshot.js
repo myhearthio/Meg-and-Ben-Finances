@@ -18,7 +18,9 @@
 //   Net Saved YTD   = Income − Expenses
 //   Savings Rate    = Net Saved / Income * 100  (0% guard when Income ≤ 0)
 
-const CURRENT_YEAR = new Date().getFullYear();
+// SNAPSHOT_YEAR env var lets you backfill an earlier year (e.g. for sandbox
+// testing or 2024/2025 historical review). Defaults to today's year.
+const CURRENT_YEAR = Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear();
 
 function parseDate(raw) {
   if (!raw) return null;

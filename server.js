@@ -319,7 +319,7 @@ async function _buildActuals() {
   const nameOv = overrides.__names || {};
   const txDescOv = overrides.__tx_desc || {};
 
-  const yr = String(new Date().getFullYear());
+  const yr = String(Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());
   // CHECK has no payee — render per-tx (no rollup).
   const unrolledPrefixes = [/^CHECK\b/i];
 

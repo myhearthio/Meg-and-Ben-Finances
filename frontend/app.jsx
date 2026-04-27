@@ -6,21 +6,43 @@ const { useState, useEffect, useCallback, useRef } = React;
 const API = "";  // same origin
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
+// Categories. Subcategories carry a `parent` key — they roll up into the parent's total
+// for KPIs, but each owns its own forecast. Parent rows display the rollup actuals + sum-of-children forecast.
 const FAMILY_CATS = [
   { key: "housing", label: "Housing" },
   { key: "utilities", label: "Utilities" },
   { key: "groceries", label: "Groceries" },
   { key: "dining", label: "Dining & Takeout" },
   { key: "transportation", label: "Transportation" },
+
   { key: "health", label: "Health" },
+  { key: "health_megan", label: "Megan", parent: "health" },
+  { key: "health_ben", label: "Ben", parent: "health" },
+  { key: "health_children", label: "Children", parent: "health" },
+
   { key: "shopping", label: "Shopping" },
+  { key: "shopping_megan", label: "Megan", parent: "shopping" },
+  { key: "shopping_ben", label: "Ben", parent: "shopping" },
+  { key: "shopping_children", label: "Children", parent: "shopping" },
+
   { key: "kids_activities", label: "Children's Activities" },
+
   { key: "travel", label: "Travel & Vacation" },
+  { key: "travel_general", label: "General (lodging, flights, etc.)", parent: "travel" },
+  { key: "travel_dining", label: "Dining", parent: "travel" },
+  { key: "travel_activities", label: "Activities", parent: "travel" },
+  { key: "travel_childcare", label: "Childcare", parent: "travel" },
+
   { key: "entertainment", label: "Entertainment & Subscriptions" },
   { key: "gifts_charity", label: "Gifts & Charity" },
   { key: "other", label: "Other" },
   { key: "excluded", label: "Excluded (paid from savings/investments)", isExcluded: true },
 ];
+
+// Helpers for parent/child rollups.
+const isParent = (k) => FAMILY_CATS.some(c => c.parent === k);
+const childrenOf = (parentKey) => FAMILY_CATS.filter(c => c.parent === parentKey);
+const parentOf = (key) => (FAMILY_CATS.find(c => c.key === key) || {}).parent || null;
 
 const fmt = (n) => {
   if (n == null || isNaN(n)) return "$0";
@@ -243,7 +265,7 @@ function MonthlyCharts({ snap }) {
     fetch("/api/forecast").then(r => r.json()).then(j => setForecast(j || {})).catch(() => {});
   }, []);
   const annualExpenseForecast = FAMILY_CATS
-    .filter(c => !c.isExcluded)
+    .filter(c => !c.isExcluded && !isParent(c.key))
     .reduce((s, c) => s + (Number(forecast[c.key]) || 0), 0);
   const monthlyExpTarget = annualExpenseForecast > 0 ? Math.round(annualExpenseForecast / 12) : 0;
 
@@ -386,11 +408,33 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals }) {
   const [expanded, setExpanded] = useState({});
   const toggle = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
 
-  const getVal = (k) => Number(forecast[k] || 0);
-  const grand = FAMILY_CATS.filter(c => !c.isExcluded).reduce((s, c) => s + getVal(c.key), 0);
+  const rawForecast = (k) => Number(forecast[k] || 0);
+  // Effective forecast for a row: parents = sum of children + own (if any); leafs = own.
+  const getVal = (k) => {
+    const kids = childrenOf(k);
+    if (kids.length > 0) return kids.reduce((s, c) => s + rawForecast(c.key), 0) + rawForecast(k);
+    return rawForecast(k);
+  };
+  // Grand total: skip parent rows (their forecast is already in the children) + excluded.
+  const grand = FAMILY_CATS
+    .filter(c => !c.isExcluded && !isParent(c.key))
+    .reduce((s, c) => s + rawForecast(c.key), 0);
 
-  const actualByCat = actuals?.byCategory || {};
-  const actualGrand = Object.entries(actualByCat).filter(([k]) => k !== "excluded").reduce((s, [, v]) => s + Number(v || 0), 0);
+  const rawActual = (k) => Number((actuals?.byCategory || {})[k] || 0);
+  const actualByCat = (() => {
+    // Parent actuals = own + children's actuals (transactions can be on either).
+    const out = { ...(actuals?.byCategory || {}) };
+    for (const c of FAMILY_CATS) {
+      const kids = childrenOf(c.key);
+      if (kids.length > 0) {
+        out[c.key] = (Number(out[c.key]) || 0) + kids.reduce((s, k) => s + rawActual(k.key), 0);
+      }
+    }
+    return out;
+  })();
+  const actualGrand = FAMILY_CATS
+    .filter(c => !c.isExcluded && !isParent(c.key))
+    .reduce((s, c) => s + rawActual(c.key), 0);
 
   const pendingTxs = [];
   for (const v of (actuals?.vendors || [])) {
@@ -465,16 +509,18 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals }) {
           const canExpand = vendors.length > 0;
           const pct = target > 0 ? Math.min(100, (actual / target) * 100) : 0;
           const isOver = target > 0 && actual > target;
+          const isSub = !!c.parent;
+          const isParentRow = isParent(c.key);
 
           return (
-            <div key={c.key} className={"pnl-cat " + (isOpen ? "pnl-cat-open " : "") + (c.isExcluded ? "pnl-cat-excluded" : "")}>
+            <div key={c.key} className={"pnl-cat " + (isOpen ? "pnl-cat-open " : "") + (c.isExcluded ? "pnl-cat-excluded" : "") + (isSub ? " pnl-cat-sub" : "") + (isParentRow ? " pnl-cat-parent" : "")} style={isSub ? { paddingLeft: 28 } : null}>
               <div className="pnl-cat-row">
                 {canExpand ? (
                   <button className="pnl-cat-caret-btn" onClick={() => toggle(c.key)}>{isOpen ? "▾" : "▸"}</button>
                 ) : (
                   <span className="pnl-cat-caret">·</span>
                 )}
-                <span className="pnl-cat-name">{c.label}</span>
+                <span className="pnl-cat-name" style={isParentRow ? { fontWeight: 600 } : (isSub ? { color: "#555" } : null)}>{c.label}</span>
                 {c.isExcluded ? (
                   <span style={{ color: "#888", fontSize: 11 }}>not counted</span>
                 ) : (
@@ -486,8 +532,10 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals }) {
                 <span className="pnl-cat-actual mono">{fmt(actual)}</span>
                 {c.isExcluded ? (
                   <span className="pnl-cat-total mono pnl-readonly">—</span>
+                ) : isParentRow ? (
+                  <span className="pnl-cat-total mono pnl-readonly" title="Sum of subcategories">{fmt(target)}</span>
                 ) : (
-                  <ForecastInput value={getVal(c.key)} onSave={v => saveVal(c.key, v)} />
+                  <ForecastInput value={rawForecast(c.key)} onSave={v => saveVal(c.key, v)} />
                 )}
               </div>
               {isOpen && (
@@ -501,7 +549,7 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals }) {
                       </div>
                       <div className="pnl-vendor-amount">{fmt(v.amount)}</div>
                       <select value={c.key} onChange={e => moveVendor(v.key, e.target.value)} style={{padding: "4px 6px", fontSize: 11}}>
-                        {FAMILY_CATS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+                        {FAMILY_CATS.map(o => <option key={o.key} value={o.key}>{o.parent ? "\u00A0\u00A0\u2014 " + o.label : o.label}</option>)}
                       </select>
                     </div>
                   ))}
@@ -562,7 +610,7 @@ function ApprovalRow({ tx, onApprove }) {
       <div className="approval-row-amount">{fmt(tx.amount)}</div>
       <select className="approval-row-select" value={cat} onChange={e => setCat(e.target.value)}>
         <option value="">Choose category…</option>
-        {FAMILY_CATS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+        {FAMILY_CATS.map(c => <option key={c.key} value={c.key}>{c.parent ? "\u00A0\u00A0\u2014 " + c.label : c.label}</option>)}
       </select>
       <button className={"approval-row-btn" + ((!cat || busy) ? " disabled" : "")} disabled={!cat || busy} onClick={go}>
         {busy ? "…" : "Approve"}

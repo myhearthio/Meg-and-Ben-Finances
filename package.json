@@ -1,0 +1,17 @@
+{
+  "name": "meg-and-ben-finance",
+  "version": "1.0.0",
+  "description": "Personal/family finance dashboard for the Lalez family. Live bank data via Plaid, smart per-vendor category learning, approval queue, monthly charts, and a tool-calling AI assistant.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "plaid": "^25.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

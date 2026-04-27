@@ -72,12 +72,17 @@ async function getAccounts() {
 }
 
 // Get all transactions from start-of-year through today, paginated.
+// SNAPSHOT_YEAR env var lets you backfill an earlier year. If set and the
+// year is in the past, the range is the full calendar year.
 async function getYTDTransactions() {
   const tok = getToken();
   if (!tok) return [];
-  const year = new Date().getFullYear();
-  const start = `${year}-01-01`;
-  const end = new Date().toISOString().slice(0, 10);
+  const today = new Date();
+  const targetYear = Number(process.env.SNAPSHOT_YEAR) || today.getFullYear();
+  const start = `${targetYear}-01-01`;
+  const end = targetYear < today.getFullYear()
+    ? `${targetYear}-12-31`
+    : today.toISOString().slice(0, 10);
   let offset = 0;
   const all = [];
   while (true) {

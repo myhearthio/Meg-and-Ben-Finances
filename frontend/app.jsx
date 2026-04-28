@@ -702,22 +702,29 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
 
 function ApprovalCard({ pendingTxs, onApprove, onRenameVendor, onRenameTx }) {
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("mb_approval_collapsed") === "1");
+  useEffect(() => { localStorage.setItem("mb_approval_collapsed", collapsed ? "1" : "0"); }, [collapsed]);
   const withGuesses = pendingTxs.filter(t => t.suggestion);
   const approveAll = async () => {
     if (bulkBusy || withGuesses.length === 0) return;
     setBulkBusy(true);
-    // Run sequentially to keep server happy + cache invalidation correct.
     for (const tx of withGuesses) {
       await onApprove(tx.id, tx.suggestion, tx.vendorKey);
     }
     setBulkBusy(false);
   };
   return (
-    <div className="approval-card">
+    <div className={"approval-card" + (collapsed ? " approval-collapsed" : "")}>
       <div className="approval-head">
+        <button
+          className="approval-collapse-btn"
+          onClick={() => setCollapsed(c => !c)}
+          aria-label={collapsed ? "Expand" : "Collapse"}
+          title={collapsed ? "Expand" : "Collapse"}
+        >{collapsed ? "▸" : "▾"}</button>
         <div className="approval-title">Approval Queue</div>
         <div className="approval-sub">{pendingTxs.length} uncategorized transaction{pendingTxs.length === 1 ? "" : "s"}</div>
-        {withGuesses.length > 0 && (
+        {withGuesses.length > 0 && !collapsed && (
           <button
             className={"approval-bulk-btn" + (bulkBusy ? " disabled" : "")}
             disabled={bulkBusy}
@@ -728,17 +735,21 @@ function ApprovalCard({ pendingTxs, onApprove, onRenameVendor, onRenameTx }) {
           </button>
         )}
       </div>
-      <div className="approval-list">
-        {pendingTxs.slice(0, 25).map(tx => (
-          <ApprovalRow key={tx.id} tx={tx}
-            onApprove={async (cat) => onApprove(tx.id, cat, tx.vendorKey)}
-            onRenameVendor={async (n) => onRenameVendor(tx.vendorKey, n)}
-            onRenameTx={async (n) => onRenameTx(tx.id, n)}
-          />
-        ))}
-      </div>
-      {pendingTxs.length > 25 && (
-        <div className="approval-more">+ {pendingTxs.length - 25} more will appear after these are approved</div>
+      {!collapsed && (
+        <>
+          <div className="approval-list">
+            {pendingTxs.slice(0, 25).map(tx => (
+              <ApprovalRow key={tx.id} tx={tx}
+                onApprove={async (cat) => onApprove(tx.id, cat, tx.vendorKey)}
+                onRenameVendor={async (n) => onRenameVendor(tx.vendorKey, n)}
+                onRenameTx={async (n) => onRenameTx(tx.id, n)}
+              />
+            ))}
+          </div>
+          {pendingTxs.length > 25 && (
+            <div className="approval-more">+ {pendingTxs.length - 25} more will appear after these are approved</div>
+          )}
+        </>
       )}
     </div>
   );

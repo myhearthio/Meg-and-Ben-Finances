@@ -15,10 +15,17 @@ const FAMILY_CATS = [
 
 const OVERRIDES_KEY = "family-overrides";
 const FORECAST_KEY = "family-forecast";
+const FORECAST_KEY_FOR = (year) => `family-forecast-${year}`;
 const MEMORY_KEY = "connor_memory";
 
 async function readOverrides() { return (await db.kvGet(OVERRIDES_KEY, {})) || {}; }
-async function readForecast()  { return (await db.kvGet(FORECAST_KEY, {})) || {}; }
+async function readForecast(year)  {
+  const yr = String(year || new Date().getFullYear());
+  const yearly = await db.kvGet(FORECAST_KEY_FOR(yr), null);
+  if (yearly && Object.keys(yearly).length > 0) return yearly;
+  if (yr === "2025") return (await db.kvGet(FORECAST_KEY, {})) || {};
+  return {};
+}
 async function readMemory()    { return (await db.kvGet(MEMORY_KEY, { facts: [], preferences: [], history: [] })) || { facts: [], preferences: [], history: [] }; }
 async function writeMemory(m)  { await db.kvSet(MEMORY_KEY, m); }
 

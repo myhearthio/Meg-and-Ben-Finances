@@ -1,27 +1,26 @@
 // tools.js — server-side tool implementations Connor can invoke via Claude tool-calling.
 // Each tool takes (input, snapshot) and returns a plain JSON-serializable object.
 // Numbers returned here are the ONLY numbers Connor is allowed to quote back.
-const fs = require("fs");
-const path = require("path");
-
-const DATA_ROOT = process.env.DATA_DIR || path.join(__dirname, "secrets");
-const MEMORY_PATH = path.join(DATA_ROOT, "connor-memory.json");
-const OVERRIDES_PATH = path.join(DATA_ROOT, "family-overrides.json");
-const FORECAST_PATH = path.join(DATA_ROOT, "family-forecast.json");
+//
+// All persistent state reads from Postgres via data.js. NEVER read/write disk.
+const db = require("./data");
 
 const FAMILY_CATS = [
   "housing", "utilities", "groceries", "dining", "transportation",
   "health", "shopping", "travel", "entertainment", "gifts_charity",
+  "kids_activities", "education",
   "other", "excluded",
 ];
 
-function readJson(p, fallback) {
-  try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return fallback; }
-}
-function writeJson(p, obj) {
-  try { fs.mkdirSync(path.dirname(p), { recursive: true }); } catch {}
-  fs.writeFileSync(p, JSON.stringify(obj, null, 2));
-}
+const OVERRIDES_KEY = "family-overrides";
+const FORECAST_KEY = "family-forecast";
+const MEMORY_KEY = "connor_memory";
+
+async function readOverrides() { return (await db.kvGet(OVERRIDES_KEY, {})) || {}; }
+async function readForecast()  { return (await db.kvGet(FORECAST_KEY, {})) || {}; }
+async function readMemory()    { return (await db.kvGet(MEMORY_KEY, { facts: [], preferences: [], history: [] })) || { facts: [], preferences: [], history: [] }; }
+async function writeMemory(m)  { await db.kvSet(MEMORY_KEY, m); }
+
 function round(n) { return Math.round(n * 100) / 100; }
 
 function normalizeVendor(s) {
@@ -38,6 +37,10 @@ function normalizeVendor(s) {
 
 function mkTxId(t) {
   return (t.date || "") + "|" + Number(t.amount) + "|" + String(t.name || "").slice(0, 60);
+}
+
+function snapshotYear() {
+  return String(Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());
 }
 
 function toolDefs() {
@@ -151,7 +154,7 @@ async function t_find_transactions(input, snap) {
   const df = input.date_from, dt = input.date_to;
   const mask = input.mask;
   const limit = input.limit ? Math.max(1, input.limit) : Infinity;
-  const yr = String(Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());
+  const yr = snapshotYear();
 
   const hits = [];
   for (const t of tx) {
@@ -187,12 +190,12 @@ async function t_get_vendor_total(input, snap) {
 }
 
 async function t_get_category_breakdown(input, snap) {
-  const ov = readJson(OVERRIDES_PATH, {});
-  const forecast = readJson(FORECAST_PATH, {});
+  const ov = await readOverrides();
+  const forecast = await readForecast();
   const requestedCat = input.category;
   const tx = snap._plaidTx || [];
   const txOv = ov.__tx || {};
-  const yr = String(Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());
+  const yr = snapshotYear();
 
   let total = 0, count = 0;
   const byMonth = {};
@@ -231,11 +234,11 @@ async function t_get_category_breakdown(input, snap) {
 
 async function t_get_top_expenses(input, snap) {
   const tx = snap._plaidTx || [];
-  const ov = readJson(OVERRIDES_PATH, {});
+  const ov = await readOverrides();
   const txOv = ov.__tx || {};
   const limit = Math.min(input.limit || 10, 50);
   const groupBy = input.group_by || "vendor";
-  const yr = String(Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());
+  const yr = snapshotYear();
 
   let df = input.date_from, dt = input.date_to;
   if (input.month) {
@@ -319,22 +322,22 @@ async function t_navigate(input, snap) {
 }
 
 async function t_save_memory(input, snap) {
-  const mem = readJson(MEMORY_PATH, { facts: [], preferences: [], history: [] });
+  const mem = await readMemory();
   const bucket = input.kind === "fact" ? "facts" : (input.kind === "preference" ? "preferences" : "history");
   mem[bucket] = mem[bucket] || [];
   mem[bucket].push({ content: input.content, saved_at: new Date().toISOString() });
   if (mem[bucket].length > 100) mem[bucket] = mem[bucket].slice(-100);
-  writeJson(MEMORY_PATH, mem);
+  await writeMemory(mem);
   return { ok: true, bucket, total_in_bucket: mem[bucket].length };
 }
 
 async function t_read_memory(input, snap) {
-  return readJson(MEMORY_PATH, { facts: [], preferences: [], history: [] });
+  return await readMemory();
 }
 
 async function t_write_to_connor_md(input, snap) {
   const { appendToConnorMd } = require("./chat");
-  appendToConnorMd(input.section, input.entry);
+  await appendToConnorMd(input.section, input.entry);
   return { ok: true, section: input.section, entry: input.entry };
 }
 

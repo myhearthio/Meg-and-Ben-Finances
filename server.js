@@ -36,9 +36,10 @@ app.use(express.json({ limit: "10mb" }));
 const frontendDir = path.join(__dirname, "frontend");
 app.use("/", express.static(frontendDir));
 
-// ---- snapshot cache (60s, invalidated on every write) ----
-let cache = { data: null, ts: 0, inflight: null };
+// ---- snapshot cache (60s, invalidated on every write) — keyed by year ----
+let snapCache = new Map(); // year -> { data, ts, inflight }
 const CACHE_MS = 60_000;
+function invalidateCache() { snapCache = new Map(); }
 
 // ---- override + forecast plumbing (Postgres-backed) ----
 const OVERRIDES_KEY = "family-overrides";
@@ -96,7 +97,7 @@ function normalizeVendor(raw) {
   return s || "UNKNOWN";
 }
 
-async function gatherSnapshot() {
+async function gatherSnapshot(year) {
   let accounts = [], plaidTx = [];
   try { accounts = await plaid.getAccounts(); } catch (e) { console.log("plaid accounts err:", e.message); }
   try { plaidTx = await plaid.getYTDTransactions(); } catch (e) { console.log("plaid tx err:", e.message); }
@@ -160,30 +161,40 @@ async function gatherSnapshot() {
     }
   }
 
-  const snap = await buildSnapshot({ accounts: accountsWithCsv, plaidTx: finalTx, excludedTxIds });
+  const snap = await buildSnapshot({ accounts: accountsWithCsv, plaidTx: finalTx, excludedTxIds, year });
   snap._plaidTx = finalTx;
   return snap;
 }
 
-async function getSnapshot(force = false) {
+async function gatherSnapshotForYear(year) {
+  // re-build the same finalTx + excludedTxIds plumbing but pass year through
+  return await gatherSnapshot(year);
+}
+
+async function getSnapshot(force = false, year) {
+  const Y = Number(year) || new Date().getFullYear();
+  const slot = snapCache.get(Y) || { data: null, ts: 0, inflight: null };
   const now = Date.now();
-  if (!force && cache.data && (now - cache.ts) < CACHE_MS) return cache.data;
-  if (cache.inflight) return cache.inflight;
-  cache.inflight = (async () => {
+  if (!force && slot.data && (now - slot.ts) < CACHE_MS) return slot.data;
+  if (slot.inflight) return slot.inflight;
+  slot.inflight = (async () => {
     try {
-      const snap = await gatherSnapshot();
-      cache.data = snap; cache.ts = Date.now();
+      const snap = await gatherSnapshotForYear(Y);
+      slot.data = snap; slot.ts = Date.now();
+      snapCache.set(Y, slot);
       return snap;
-    } finally { cache.inflight = null; }
+    } finally { slot.inflight = null; }
   })();
-  return cache.inflight;
+  snapCache.set(Y, slot);
+  return slot.inflight;
 }
 
 // ---- endpoints ----
 app.get("/api/snapshot", async (req, res) => {
   try {
     const force = req.query.force === "1";
-    const snap = await getSnapshot(force);
+    const year = req.query.year;
+    const snap = await getSnapshot(force, year);
     const { _plaidTx, ...safe } = snap;
     res.json(safe);
   } catch (e) { console.log("snapshot err:", e); res.status(500).json({ error: e.message }); }
@@ -230,7 +241,7 @@ app.post("/api/plaid/link", async (req, res) => {
 app.post("/api/plaid/exchange", async (req, res) => {
   try {
     await plaid.exchange(req.body.public_token);
-    cache = { data: null, ts: 0, inflight: null };
+    invalidateCache();
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -253,7 +264,7 @@ app.post("/api/upload/csv", express.text({ type: "*/*", limit: "25mb" }), async 
     const parsed = csv.parseChaseCsv(csvText, mask);
     if (!parsed.format) return res.status(400).json({ error: parsed.error || "unrecognized CSV format" });
     await csv.saveCsv(mask, csvText, kind);
-    cache = { data: null, ts: 0, inflight: null };
+    invalidateCache();
     res.json({
       ok: true, mask, kind, format: parsed.format, count: parsed.transactions.length,
       date_range: {
@@ -294,7 +305,7 @@ app.post("/api/forecast", async (req, res) => {
     const cur = await _readForecast(year);
     cur[category] = Math.round(n);
     await _writeForecast(cur, year);
-    cache.data = null; cache.ts = 0;
+    invalidateCache();
     res.json({ ok: true, forecast: cur });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -375,7 +386,7 @@ app.post("/api/actuals", async (req, res) => {
       } else { handled = false; }
     });
     if (!handled) return res.status(400).json({ error: "bad payload" });
-    cache.data = null; cache.ts = 0;
+    invalidateCache();
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

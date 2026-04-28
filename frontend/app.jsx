@@ -106,17 +106,20 @@ const fmtPct = (n) => (n == null || isNaN(n)) ? "0%" : `${n}%`;
 
 function App() {
   const [tab, setTab] = useState(() => localStorage.getItem("mb_tab") || "dashboard");
+  const [year, setYear] = useState(() => Number(localStorage.getItem("mb_year")) || new Date().getFullYear());
   const [snap, setSnap] = useState(null);
   const [err, setErr] = useState(null);
   const [refreshedAt, setRefreshedAt] = useState(null);
   const [plaidStatus, setPlaidStatus] = useState({ connected: false });
 
   useEffect(() => { localStorage.setItem("mb_tab", tab); }, [tab]);
+  useEffect(() => { localStorage.setItem("mb_year", String(year)); }, [year]);
 
   const load = useCallback(async (force = false) => {
     try {
+      const qs = `?year=${year}` + (force ? "&force=1" : "");
       const [snapRes, plaidRes] = await Promise.all([
-        fetch(API + "/api/snapshot" + (force ? "?force=1" : "")).then(r => r.json()),
+        fetch(API + "/api/snapshot" + qs).then(r => r.json()),
         fetch(API + "/api/plaid/status").then(r => r.json()).catch(() => ({ connected: false })),
       ]);
       if (snapRes.error) throw new Error(snapRes.error);
@@ -127,7 +130,7 @@ function App() {
     } catch (e) {
       setErr(e.message);
     }
-  }, []);
+  }, [year]);
 
   useEffect(() => {
     load();
@@ -148,6 +151,8 @@ function App() {
         plaidStatus={plaidStatus}
         tab={tab}
         onTabChange={setTab}
+        year={year}
+        onYearChange={setYear}
       />
       <Sidebar snap={snap} plaidStatus={plaidStatus} onPlaidChanged={() => load(true)} />
       <Main snap={snap} tab={tab} />
@@ -156,7 +161,7 @@ function App() {
   );
 }
 
-function TopBar({ refreshedAt, onRefresh, plaidStatus, tab, onTabChange }) {
+function TopBar({ refreshedAt, onRefresh, plaidStatus, tab, onTabChange, year, onYearChange }) {
   const tabs = [
     { key: "dashboard", label: "Dashboard" },
     { key: "budget", label: "Budget & Expenses" },
@@ -174,6 +179,15 @@ function TopBar({ refreshedAt, onRefresh, plaidStatus, tab, onTabChange }) {
         </div>
       </div>
       <div className="topbar-right">
+        <div className="year-switch">
+          {[2025, 2026].map(y => (
+            <button
+              key={y}
+              className={"year-btn" + (year === y ? " active" : "")}
+              onClick={() => onYearChange(y)}
+            >{y}</button>
+          ))}
+        </div>
         <span className="status-text">
           <span className={"status-dot " + (plaidStatus.connected ? "status-on" : "status-off")}></span>
           Plaid {plaidStatus.connected ? "connected" : "not connected"}

@@ -42,12 +42,23 @@ const CACHE_MS = 60_000;
 
 // ---- override + forecast plumbing (Postgres-backed) ----
 const OVERRIDES_KEY = "family-overrides";
-const FORECAST_KEY = "family-forecast";
+const FORECAST_KEY = "family-forecast"; // legacy, treated as 2025
+const FORECAST_KEY_FOR = (year) => `family-forecast-${year}`;
 
 async function _readOverrides() { return (await db.kvGet(OVERRIDES_KEY, {})) || {}; }
 async function _writeOverrides(obj) { await db.kvSet(OVERRIDES_KEY, obj); }
-async function _readForecast()  { return (await db.kvGet(FORECAST_KEY, {})) || {}; }
-async function _writeForecast(obj) { await db.kvSet(FORECAST_KEY, obj); }
+async function _readForecast(year) {
+  const yr = String(year || new Date().getFullYear());
+  // Try year-specific key first; fall back to legacy single-blob (which is 2025 historically).
+  const yearly = await db.kvGet(FORECAST_KEY_FOR(yr), null);
+  if (yearly && Object.keys(yearly).length > 0) return yearly;
+  if (yr === "2025") return (await db.kvGet(FORECAST_KEY, {})) || {};
+  return {};
+}
+async function _writeForecast(obj, year) {
+  const yr = String(year || new Date().getFullYear());
+  await db.kvSet(FORECAST_KEY_FOR(yr), obj);
+}
 
 // Single-promise queue serializes override writes against concurrent requests.
 let _writeQueue = Promise.resolve();
@@ -266,16 +277,16 @@ app.get("/api/upload/status", (req, res) => {
   res.json(out);
 });
 
-app.get("/api/forecast", async (req, res) => res.json(await _readForecast()));
+app.get("/api/forecast", async (req, res) => res.json(await _readForecast(req.query.year)));
 app.post("/api/forecast", async (req, res) => {
   try {
-    const { category, amount } = req.body || {};
+    const { category, amount, year } = req.body || {};
     if (!category) return res.status(400).json({ error: "category required" });
     const n = Number(amount);
     if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: "amount must be a non-negative number" });
-    const cur = await _readForecast();
+    const cur = await _readForecast(year);
     cur[category] = Math.round(n);
-    await _writeForecast(cur);
+    await _writeForecast(cur, year);
     cache.data = null; cache.ts = 0;
     res.json({ ok: true, forecast: cur });
   } catch (e) { res.status(500).json({ error: e.message }); }

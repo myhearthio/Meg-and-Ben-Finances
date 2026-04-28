@@ -27,6 +27,10 @@ const FAMILY_CATS = [
 
   { key: "kids_activities", label: "Children's Activities" },
 
+  { key: "childcare", label: "Childcare" },
+
+  { key: "education", label: "Education" },
+
   { key: "travel", label: "Travel & Vacation" },
   { key: "travel_general", label: "General (lodging, flights, etc.)", parent: "travel" },
   { key: "travel_dining", label: "Dining", parent: "travel" },
@@ -374,8 +378,11 @@ function BudgetView({ snap }) {
 
   useEffect(() => {
     fetch("/api/forecast").then(r => r.json()).then(j => setForecast(j || {})).catch(() => {});
-    fetch("/api/actuals").then(r => r.json()).then(j => setActuals(j || { vendors: [], byCategory: {}, total: 0 })).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    fetch("/api/actuals?year=" + year).then(r => r.json()).then(j => setActuals(j || { vendors: [], byCategory: {}, total: 0 })).catch(() => {});
+  }, [year]);
 
   const isCurrentYear = String(year) === String(snap.year);
   const years = [String(snap.year - 2), String(snap.year - 1), String(snap.year)];
@@ -385,23 +392,26 @@ function BudgetView({ snap }) {
       <div className="page-title">Budget & Expenses</div>
       <div className="page-subtitle">
         Forecast vs actual for {year}.
-        {!isCurrentYear && " (Historical year — actuals only, no forecast.)"}
+        {!isCurrentYear && " (Historical year — actuals only.)"}
       </div>
       <div className="year-pills">
         {years.map(y => (
           <div key={y} className={"year-pill" + (y === year ? " active" : "")} onClick={() => setYear(y)}>{y}</div>
         ))}
       </div>
-      {isCurrentYear ? (
-        <BudgetCurrentYear forecast={forecast} setForecast={setForecast} actuals={actuals} setActuals={setActuals} />
-      ) : (
-        <BudgetHistorical year={year} actuals={actuals} />
-      )}
+      <BudgetCurrentYear
+        forecast={forecast}
+        setForecast={setForecast}
+        actuals={actuals}
+        setActuals={setActuals}
+        year={year}
+        readOnly={!isCurrentYear}
+      />
     </div>
   );
 }
 
-function BudgetHistorical({ year, actuals }) {
+function BudgetHistorical_unused() { return null;
   // Snapshot only knows current year; historical view is a stub for now (CSV upload feature lights this up later).
   return (
     <div className="accounts-section">
@@ -411,7 +421,7 @@ function BudgetHistorical({ year, actuals }) {
   );
 }
 
-function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals }) {
+function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, readOnly }) {
   const [expanded, setExpanded] = useState({});
   const [expandedVendors, setExpandedVendors] = useState({});
   const toggle = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
@@ -478,7 +488,7 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals }) {
   };
 
   const refreshActuals = async () => {
-    const fresh = await fetch("/api/actuals").then(r => r.json());
+    const fresh = await fetch("/api/actuals?year=" + (year || "")).then(r => r.json());
     setActuals(fresh);
   };
 
@@ -549,7 +559,9 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals }) {
                   </div>
                 )}
                 <span className="pnl-cat-actual mono">{fmt(actual)}</span>
-                {c.isExcluded ? (
+                {readOnly ? (
+                  <span className="pnl-cat-total mono pnl-readonly">—</span>
+                ) : c.isExcluded ? (
                   <span className="pnl-cat-total mono pnl-readonly">—</span>
                 ) : isParentRow ? (
                   <span className="pnl-cat-total mono pnl-readonly" title="Sum of subcategories">{fmt(target)}</span>
@@ -614,7 +626,7 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals }) {
             <span className="pnl-cat-name">Total</span>
             <span></span>
             <span className="pnl-cat-actual mono">{fmt(actualGrand)}</span>
-            <span className="pnl-cat-total mono">{fmt(grand)}</span>
+            <span className="pnl-cat-total mono">{readOnly ? "—" : fmt(grand)}</span>
           </div>
         </div>
       </div>

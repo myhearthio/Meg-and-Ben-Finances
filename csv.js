@@ -38,7 +38,8 @@ function parseLine(line) {
 }
 
 function toISODate(s) {
-  const m = String(s || "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  // Handles MM/DD/YYYY, MM/DD/YY, MM-DD-YYYY, MM-DD-YY
+  const m = String(s || "").trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
   if (!m) return null;
   let [_, mm, dd, yy] = m;
   if (yy.length === 2) yy = "20" + yy;
@@ -60,11 +61,35 @@ function parseChaseCsv(csvText, mask) {
   const ccAmount = idx("amount");
   const ccDesc = idx("description");
 
-  const isCC = ccTxDate >= 0 && ccAmount >= 0;
-  const isChecking = !isCC && chkPosting >= 0 && chkAmount >= 0;
+  // Citibank format: Status, Date, Description, Debit, Credit
+  const citiStatus = idx("status");
+  const citiDate = idx("date");
+  const citiDesc = idx("description");
+  const citiDebit = idx("debit");
+  const citiCredit = idx("credit");
+  const isCiti = citiStatus >= 0 && citiDate >= 0 && citiDebit >= 0 && citiCredit >= 0;
+
+  const isCC = !isCiti && ccTxDate >= 0 && ccAmount >= 0;
+  const isChecking = !isCiti && !isCC && chkPosting >= 0 && chkAmount >= 0;
 
   const out = [];
-  if (isChecking) {
+  if (isCiti) {
+    // Debit = money out (expense), Credit = money in (income)
+    // App convention: positive amount = expense, negative = income.
+    for (let i = 1; i < lines.length; i++) {
+      const p = parseLine(lines[i]);
+      const date = toISODate(p[citiDate]);
+      if (!date) continue;
+      const debit = parseFloat(p[citiDebit]);
+      const credit = parseFloat(p[citiCredit]);
+      let amount = null;
+      if (!isNaN(debit) && debit !== 0) amount = debit;
+      else if (!isNaN(credit) && credit !== 0) amount = -credit;
+      if (amount === null) continue;
+      out.push({ date, amount, name: (p[citiDesc] || "").trim(), mask, source: "csv" });
+    }
+    return { transactions: out, format: "citi" };
+  } else if (isChecking) {
     for (let i = 1; i < lines.length; i++) {
       const p = parseLine(lines[i]);
       const date = toISODate(p[chkPosting]);

@@ -770,16 +770,40 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
 function ApprovalCard({ pendingTxs, onApprove, onRenameVendor, onRenameTx }) {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("mb_approval_collapsed") === "1");
+  const [page, setPage] = useState(0);
+  const [rowCats, setRowCats] = useState({});
   useEffect(() => { localStorage.setItem("mb_approval_collapsed", collapsed ? "1" : "0"); }, [collapsed]);
-  const withGuesses = pendingTxs.filter(t => t.suggestion);
-  const approveAll = async () => {
-    if (bulkBusy || withGuesses.length === 0) return;
+
+  const PAGE_SIZE = 10;
+  const totalPages = Math.max(1, Math.ceil(pendingTxs.length / PAGE_SIZE));
+  useEffect(() => { if (page >= totalPages) setPage(Math.max(0, totalPages - 1)); }, [page, totalPages]);
+  const pageStart = page * PAGE_SIZE;
+  const pageTxs = pendingTxs.slice(pageStart, pageStart + PAGE_SIZE);
+
+  // Initialize row category from suggestion when a tx first appears
+  const pageIdsKey = pageTxs.map(t => t.id).join("|");
+  useEffect(() => {
+    setRowCats(prev => {
+      const next = { ...prev };
+      let changed = false;
+      for (const t of pageTxs) {
+        if (!(t.id in next)) { next[t.id] = t.suggestion || ""; changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  }, [pageIdsKey]);
+
+  const setCat = (id, c) => setRowCats(prev => ({ ...prev, [id]: c }));
+  const pageReady = pageTxs.filter(t => rowCats[t.id]);
+  const approveAllShown = async () => {
+    if (bulkBusy || pageReady.length === 0) return;
     setBulkBusy(true);
-    for (const tx of withGuesses) {
-      await onApprove(tx.id, tx.suggestion, tx.vendorKey);
+    for (const tx of pageReady) {
+      await onApprove(tx.id, rowCats[tx.id], tx.vendorKey);
     }
     setBulkBusy(false);
   };
+
   return (
     <div className={"approval-card" + (collapsed ? " approval-collapsed" : "")}>
       <div className="approval-head">
@@ -790,31 +814,50 @@ function ApprovalCard({ pendingTxs, onApprove, onRenameVendor, onRenameTx }) {
           title={collapsed ? "Expand" : "Collapse"}
         >{collapsed ? "▸" : "▾"}</button>
         <div className="approval-title">Approval Queue</div>
-        <div className="approval-sub">{pendingTxs.length} uncategorized transaction{pendingTxs.length === 1 ? "" : "s"}</div>
-        {withGuesses.length > 0 && !collapsed && (
+        <div className="approval-sub">
+          {pendingTxs.length} uncategorized transaction{pendingTxs.length === 1 ? "" : "s"}
+          {totalPages > 1 && !collapsed && <> · page {page+1} of {totalPages}</>}
+        </div>
+        {pageReady.length > 0 && !collapsed && (
           <button
             className={"approval-bulk-btn" + (bulkBusy ? " disabled" : "")}
             disabled={bulkBusy}
-            onClick={approveAll}
+            onClick={approveAllShown}
             style={{ marginLeft: "auto", padding: "8px 14px", border: "1px solid #d4d4d0", background: "#fafaf8", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: bulkBusy ? "wait" : "pointer" }}
           >
-            {bulkBusy ? `Approving… (${withGuesses.length} left)` : `Approve all ${withGuesses.length} with guesses`}
+            {bulkBusy ? `Approving… (${pageReady.length} left)` : `Approve all ${pageReady.length} shown`}
           </button>
         )}
       </div>
       {!collapsed && (
         <>
           <div className="approval-list">
-            {pendingTxs.slice(0, 25).map(tx => (
+            {pageTxs.map(tx => (
               <ApprovalRow key={tx.id} tx={tx}
-                onApprove={async (cat) => onApprove(tx.id, cat, tx.vendorKey)}
+                cat={rowCats[tx.id] || ""}
+                onCatChange={(c) => setCat(tx.id, c)}
+                onApprove={async () => onApprove(tx.id, rowCats[tx.id] || tx.suggestion, tx.vendorKey)}
                 onRenameVendor={async (n) => onRenameVendor(tx.vendorKey, n)}
                 onRenameTx={async (n) => onRenameTx(tx.id, n)}
               />
             ))}
           </div>
-          {pendingTxs.length > 25 && (
-            <div className="approval-more">+ {pendingTxs.length - 25} more will appear after these are approved</div>
+          {totalPages > 1 && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderTop: "1px solid #eee" }}>
+              <button
+                onClick={() => setPage(p => Math.max(0, p - 1))}
+                disabled={page === 0}
+                style={{ padding: "6px 12px", border: "1px solid #d4d4d0", background: page === 0 ? "#f5f5f3" : "#fafaf8", borderRadius: 6, fontSize: 12, cursor: page === 0 ? "default" : "pointer", opacity: page === 0 ? 0.5 : 1 }}
+              >← Previous</button>
+              <span style={{ fontSize: 12, color: "#888" }}>
+                Showing {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, pendingTxs.length)} of {pendingTxs.length}
+              </span>
+              <button
+                onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+                disabled={page >= totalPages - 1}
+                style={{ padding: "6px 12px", border: "1px solid #d4d4d0", background: page >= totalPages - 1 ? "#f5f5f3" : "#fafaf8", borderRadius: 6, fontSize: 12, cursor: page >= totalPages - 1 ? "default" : "pointer", opacity: page >= totalPages - 1 ? 0.5 : 1 }}
+              >Next →</button>
+            </div>
           )}
         </>
       )}
@@ -822,15 +865,14 @@ function ApprovalCard({ pendingTxs, onApprove, onRenameVendor, onRenameTx }) {
   );
 }
 
-function ApprovalRow({ tx, onApprove, onRenameVendor, onRenameTx }) {
+function ApprovalRow({ tx, cat, onCatChange, onApprove, onRenameVendor, onRenameTx }) {
   useFamilyCats();
-  const [cat, setCat] = useState(tx.suggestion || "");
   const [busy, setBusy] = useState(false);
   const fmtDate = (d) => { if (!d) return ""; const p = d.split("-"); return p.length === 3 ? p[1]+"/"+p[2] : d; };
   const go = async () => {
     if (!cat || busy) return;
     setBusy(true);
-    await onApprove(cat);
+    await onApprove();
   };
   return (
     <div className="approval-row">
@@ -840,7 +882,7 @@ function ApprovalRow({ tx, onApprove, onRenameVendor, onRenameTx }) {
         <EditableText value={tx.desc} onSave={onRenameTx} className="approval-row-desc" />
       </div>
       <div className="approval-row-amount">{fmt(tx.amount)}</div>
-      <select className="approval-row-select" value={cat} onChange={e => setCat(e.target.value)}>
+      <select className="approval-row-select" value={cat} onChange={e => onCatChange(e.target.value)}>
         <option value="">Choose category…</option>
         {FAMILY_CATS.map(c => <option key={c.key} value={c.key}>{c.parent ? "\u00A0\u00A0\u2014 " + c.label : c.label}</option>)}
       </select>

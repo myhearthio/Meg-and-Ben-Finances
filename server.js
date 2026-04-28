@@ -372,6 +372,98 @@ app.post("/api/forecast", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ----- Auto-categorization (suggestions only — never silently writes) -----
+// Maps Plaid's personal_finance_category + vendor keywords to family categories.
+// Returns a category key (e.g. "groceries") or "" if no confident guess.
+function guessCategory(t) {
+  const desc = String(t.desc || "").toUpperCase();
+  const pfc = t.pfcDetailed || "";
+  const primary = t.pfcPrimary || "";
+
+  // 1) Vendor keyword overrides (highest priority — most accurate for our use)
+  const KW = [
+    [/WHOLE FOODS|TRADER JOE|ALDI|WEGMANS|SAFEWAY|KROGER|SHOPRITE|FAIRWAY|GRISTEDES|PUBLIX|FRESH DIRECT|GOPUFF|H MART|SPROUTS/, "groceries"],
+    [/UBER EATS|DOORDASH|GRUBHUB|SEAMLESS|CHIPOTLE|SWEETGREEN|CAVA|DUNKIN|STARBUCKS|MCDONALD|CHICK-FIL-A|SHAKE SHACK|JOE.S? COFFEE|BLUE BOTTLE|PANERA|TST\*|TOAST/, "dining"],
+    [/UBER\b|LYFT|REVEL|CITIBIKE|MTA|METRO|NJ TRANSIT|AMTRAK|SHELL|EXXON|MOBIL|BP\b|CHEVRON|PARKING|GARAGE|TOLL|EZPASS|E-?ZPASS/, "transportation"],
+    [/CON ?ED|CONSOLIDATED EDISON|NATIONAL GRID|SPECTRUM|VERIZON|XFINITY|COMCAST|T-MOBILE|AT&T|OPTIMUM|RCN|ATLANTIC BROADBAND/, "utilities"],
+    [/RENT|MORTGAGE|HOA|HOMEOWNERS|LANDLORD/, "housing"],
+    [/CVS|WALGREENS|RITE AID|DUANE READE|PHARMACY|ONE MEDICAL|CITYMD|MOUNT SINAI|NYU LANGONE|HOSPITAL|DENTAL|DENTIST|VISION|EYE.*DOCTOR|OPTOMETR|ZOCDOC/, "health"],
+    [/AMAZON|TARGET|WALMART|COSTCO|BEST BUY|HOME DEPOT|LOWES|IKEA|WAYFAIR|MACY|NORDSTROM|BLOOMINGDALE|UNIQLO|ZARA|H&M|GAP\b|OLD NAVY|SEPHORA|ULTA|REI\b|DICK.S/, "shopping"],
+    [/AIRBNB|MARRIOTT|HILTON|HYATT|EXPEDIA|BOOKING\.COM|UNITED AIR|AMERICAN AIR|DELTA|JETBLUE|SOUTHWEST|FLIGHT|HOTEL/, "travel"],
+    [/NETFLIX|HULU|SPOTIFY|APPLE\.COM|APPLE TV|DISNEY|HBO|PARAMOUNT|PEACOCK|YOUTUBE PREMIUM|AUDIBLE|KINDLE|GOOGLE ?ONE|ICLOUD|CHATGPT|OPENAI|ANTHROPIC|MIDJOURNEY|NYTIMES|WSJ|SUBSTACK|PATREON/, "entertainment"],
+    [/IRS\b|H&R BLOCK|TURBOTAX|TAX |CPA|ACCOUNTANT|LEGALZOOM|LAWYER|ATTORNEY/, "taxes_professional"],
+    [/CHURCH|SYNAGOGUE|MOSQUE|TEMPLE|CHARITY|DONAT|GOFUNDME|CHABAD|JCC|UJA/, "gifts_charity"],
+  ];
+  for (const [re, cat] of KW) if (re.test(desc)) return cat;
+
+  // 2) Plaid's personal_finance_category mapping (detailed)
+  const PFC = {
+    "FOOD_AND_DRINK_GROCERIES": "groceries",
+    "FOOD_AND_DRINK_RESTAURANT": "dining",
+    "FOOD_AND_DRINK_FAST_FOOD": "dining",
+    "FOOD_AND_DRINK_COFFEE": "dining",
+    "FOOD_AND_DRINK_BEER_WINE_AND_LIQUOR": "dining",
+    "TRANSPORTATION_TAXIS_AND_RIDE_SHARES": "transportation",
+    "TRANSPORTATION_PUBLIC_TRANSIT": "transportation",
+    "TRANSPORTATION_GAS": "transportation",
+    "TRANSPORTATION_PARKING": "transportation",
+    "TRANSPORTATION_TOLLS": "transportation",
+    "TRAVEL_FLIGHTS": "travel",
+    "TRAVEL_LODGING": "travel",
+    "TRAVEL_RENTAL_CARS": "travel",
+    "RENT_AND_UTILITIES_RENT": "housing",
+    "RENT_AND_UTILITIES_INTERNET_AND_CABLE": "utilities",
+    "RENT_AND_UTILITIES_TELEPHONE": "utilities",
+    "RENT_AND_UTILITIES_GAS_AND_ELECTRICITY": "utilities",
+    "RENT_AND_UTILITIES_WATER": "utilities",
+    "RENT_AND_UTILITIES_SEWAGE_AND_WASTE_MANAGEMENT": "utilities",
+    "MEDICAL_PRIMARY_CARE": "health",
+    "MEDICAL_DENTAL_CARE": "health",
+    "MEDICAL_EYE_CARE": "health",
+    "MEDICAL_PHARMACIES_AND_SUPPLEMENTS": "health",
+    "MEDICAL_VETERINARY_SERVICES": "health",
+    "MEDICAL_NURSING_CARE": "health",
+    "MEDICAL_OTHER_MEDICAL": "health",
+    "GENERAL_MERCHANDISE_CLOTHING_AND_ACCESSORIES": "shopping",
+    "GENERAL_MERCHANDISE_DEPARTMENT_STORES": "shopping",
+    "GENERAL_MERCHANDISE_ONLINE_MARKETPLACES": "shopping",
+    "GENERAL_MERCHANDISE_SUPERSTORES": "shopping",
+    "GENERAL_MERCHANDISE_ELECTRONICS": "shopping",
+    "GENERAL_MERCHANDISE_OFFICE_SUPPLIES": "shopping",
+    "GENERAL_MERCHANDISE_SPORTING_GOODS": "shopping",
+    "GENERAL_MERCHANDISE_BOOKSTORES_AND_NEWSSTANDS": "shopping",
+    "GENERAL_MERCHANDISE_GIFTS_AND_NOVELTIES": "shopping",
+    "ENTERTAINMENT_TV_AND_MOVIES": "entertainment",
+    "ENTERTAINMENT_MUSIC_AND_AUDIO": "entertainment",
+    "ENTERTAINMENT_VIDEO_GAMES": "entertainment",
+    "ENTERTAINMENT_SPORTING_EVENTS_AMUSEMENT_PARKS_AND_MUSEUMS": "entertainment",
+    "ENTERTAINMENT_CASINOS_AND_GAMBLING": "entertainment",
+    "PERSONAL_CARE_HAIR_AND_BEAUTY": "shopping",
+    "PERSONAL_CARE_GYMS_AND_FITNESS_CENTERS": "health",
+    "GENERAL_SERVICES_CHILDCARE": "childcare",
+    "GENERAL_SERVICES_EDUCATION": "education",
+    "HOME_IMPROVEMENT_HARDWARE": "shopping",
+    "HOME_IMPROVEMENT_FURNITURE": "shopping",
+  };
+  if (PFC[pfc]) return PFC[pfc];
+
+  // 3) Coarse Plaid primary category fallback
+  const PRIMARY = {
+    "FOOD_AND_DRINK": "dining",
+    "TRANSPORTATION": "transportation",
+    "TRAVEL": "travel",
+    "RENT_AND_UTILITIES": "utilities",
+    "MEDICAL": "health",
+    "ENTERTAINMENT": "entertainment",
+    "GENERAL_MERCHANDISE": "shopping",
+    "PERSONAL_CARE": "shopping",
+    "HOME_IMPROVEMENT": "shopping",
+  };
+  if (PRIMARY[primary]) return PRIMARY[primary];
+
+  return "";
+}
+
 async function _buildActuals(yearOverride) {
   const snap = await getSnapshot(false);
   const tx = snap._plaidTx || [];
@@ -396,20 +488,26 @@ async function _buildActuals(yearOverride) {
     const normName = normalizeVendor(rawDesc);
     const vendorKey = isUnrolled ? (normName + "#" + txIdx) : normName;
     const txId = (t.date || "") + "|" + Number(t.amount) + "|" + rawDesc.slice(0, 60);
-    txList.push({ id: txId, date: (t.date || "").slice(0, 10), desc: rawDesc, amount: Number(t.amount), vendorKey, vendorNorm: normName, mask: t.account_mask || "" });
+    // Plaid category data (used for auto-guess)
+    const pfc = t.personal_finance_category || null;
+    const pfcPrimary = pfc ? String(pfc.primary || "").toUpperCase() : "";
+    const pfcDetailed = pfc ? String(pfc.detailed || "").toUpperCase() : "";
+    const plaidCats = Array.isArray(t.category) ? t.category.map(c => String(c).toUpperCase()) : [];
+    txList.push({ id: txId, date: (t.date || "").slice(0, 10), desc: rawDesc, amount: Number(t.amount), vendorKey, vendorNorm: normName, mask: t.account_mask || "", pfcPrimary, pfcDetailed, plaidCats });
     txIdx++;
   }
   const byVendor = {};
   for (const t of txList) {
     const txCat = txOv[t.id] || null;
     const vOverride = overrides[t.vendorKey] || null;
+    const autoGuess = vOverride ? null : guessCategory(t);
     const cat = txCat || vOverride || "other";
     let v = byVendor[t.vendorKey];
     if (!v) v = byVendor[t.vendorKey] = { key: t.vendorKey, name: nameOv[t.vendorKey] || t.vendorNorm, rawSample: t.desc, amount: 0, count: 0, cat: vOverride || "other", vendorSaved: !!vOverride, txs: [] };
     v.amount += t.amount;
     v.count += 1;
     const userSet = !!(txCat || vOverride);
-    const suggestion = vOverride || "";
+    const suggestion = vOverride || autoGuess || "";
     v.txs.push({ id: t.id, date: t.date, desc: txDescOv[t.id] || t.desc, amount: t.amount, cat, userSet, suggestion });
   }
   const vendors = Object.values(byVendor).sort((a, b) => b.amount - a.amount);

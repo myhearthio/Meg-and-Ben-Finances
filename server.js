@@ -264,8 +264,15 @@ app.post("/api/upload/csv", express.text({ type: "*/*", limit: "25mb" }), async 
   } catch (e) { console.log("csv upload err:", e); res.status(500).json({ error: e.message }); }
 });
 
+app.get("/api/upload/csv/:mask", async (req, res) => {
+  try {
+    const row = await db.csvGet(req.params.mask);
+    if (!row) return res.status(404).json({ error: "not found" });
+    res.type("text/plain").send(row.csv);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get("/api/upload/status", (req, res) => {
-  const out = {};
   for (const m of csv.listMasks()) {
     const r = csv.loadCsvTx(m);
     out[m] = {

@@ -18,8 +18,8 @@
 //   Net Saved YTD   = Income − Expenses
 //   Savings Rate    = Net Saved / Income * 100  (0% guard when Income ≤ 0)
 
-// SNAPSHOT_YEAR env var lets you backfill an earlier year (e.g. for sandbox
-// testing or 2024/2025 historical review). Defaults to today's year.
+// Snapshot year is overridable so off-cycle data (last year's CSV imported in Jan)
+// still reports correctly. Set SNAPSHOT_YEAR=2025 in Render env to lock to 2025.
 const CURRENT_YEAR = Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear();
 
 function parseDate(raw) {
@@ -126,7 +126,7 @@ function detectCCAutopay(plaidTx, accountIdx) {
   return skip;
 }
 
-function computeIncome(plaidTx, accountIdx, isExcluded, transfers) {
+function computeIncome(plaidTx, accountIdx, isExcluded, transfers, year) {
   let total = 0, count = 0, excluded = 0;
   const byMonth = {};
   for (const t of plaidTx) {
@@ -134,7 +134,7 @@ function computeIncome(plaidTx, accountIdx, isExcluded, transfers) {
     if (!acct || acct.kind !== "depository") continue;
     if (t.amount >= 0) continue; // deposits are negative in Plaid convention
     const d = parseDate(t.date);
-    if (!d || d.y !== CURRENT_YEAR) continue;
+    if (!d || d.y !== year) continue;
     if (transfers.has(txKey(t))) continue; // internal transfer credit — not income
     const amt = -t.amount;
     if (isExcluded(t)) { excluded += amt; continue; }
@@ -145,7 +145,7 @@ function computeIncome(plaidTx, accountIdx, isExcluded, transfers) {
   return { total: round(total), count, byMonth: roundMap(byMonth), excluded: round(excluded) };
 }
 
-function computeExpenses(plaidTx, accountIdx, isExcluded, transfers, autopay) {
+function computeExpenses(plaidTx, accountIdx, isExcluded, transfers, autopay, year) {
   let total = 0, count = 0, excluded = 0;
   const byMonth = {};
   for (const t of plaidTx) {
@@ -153,7 +153,7 @@ function computeExpenses(plaidTx, accountIdx, isExcluded, transfers, autopay) {
     if (!acct) continue;
     if (acct.kind !== "depository" && acct.kind !== "credit") continue;
     const d = parseDate(t.date);
-    if (!d || d.y !== CURRENT_YEAR) continue;
+    if (!d || d.y !== year) continue;
 
     if (acct.kind === "depository") {
       if (t.amount <= 0) continue; // credits handled in computeIncome
@@ -201,15 +201,16 @@ function computeCashOnHand(accounts) {
   return { total: round(total), parts };
 }
 
-async function buildSnapshot({ accounts, plaidTx, excludedTxIds }) {
+async function buildSnapshot({ accounts, plaidTx, excludedTxIds, year }) {
+  const Y = Number(year) || CURRENT_YEAR;
   const accountIdx = buildAccountIndex(accounts);
   const transfers = detectInternalTransfers(plaidTx, accountIdx);
   const autopay = detectCCAutopay(plaidTx, accountIdx);
   const exSet = excludedTxIds instanceof Set ? excludedTxIds : new Set(excludedTxIds || []);
   const isExcluded = (t) => exSet.has(mkTxId(t));
 
-  const income = computeIncome(plaidTx, accountIdx, isExcluded, transfers);
-  const expenses = computeExpenses(plaidTx, accountIdx, isExcluded, transfers, autopay);
+  const income = computeIncome(plaidTx, accountIdx, isExcluded, transfers, Y);
+  const expenses = computeExpenses(plaidTx, accountIdx, isExcluded, transfers, autopay, Y);
   const cash = computeCashOnHand(accounts);
 
   const netSaved = round(income.total - expenses.total);
@@ -224,7 +225,7 @@ async function buildSnapshot({ accounts, plaidTx, excludedTxIds }) {
   return {
     generated_at: new Date().toISOString(),
     as_of_date: new Date().toISOString().slice(0, 10),
-    year: CURRENT_YEAR,
+    year: Y,
     kpis: {
       cash_on_hand: cash.total,
       income_ytd: income.total,

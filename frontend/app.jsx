@@ -45,6 +45,42 @@ const FAMILY_CATS = [
   { key: "excluded", label: "Excluded (paid from savings/investments)", isExcluded: true },
 ];
 
+// Inline-editable text. Click pencil → input; Enter saves, Esc cancels.
+function EditableText({ value, onSave, className }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (!editing) setDraft(value); }, [value, editing]);
+  const save = async () => {
+    const next = (draft || "").trim();
+    if (!next || next === value) { setEditing(false); return; }
+    setBusy(true);
+    try { await onSave(next); } finally { setBusy(false); setEditing(false); }
+  };
+  if (editing) {
+    return (
+      <input
+        className={(className || "") + " editable-input"}
+        autoFocus
+        value={draft}
+        disabled={busy}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={save}
+        onKeyDown={e => {
+          if (e.key === "Enter") { e.preventDefault(); save(); }
+          else if (e.key === "Escape") { e.preventDefault(); setEditing(false); }
+        }}
+      />
+    );
+  }
+  return (
+    <span className={(className || "") + " editable-wrap"}>
+      <span className="editable-text">{value}</span>
+      <button className="editable-edit" onClick={() => setEditing(true)} title="Rename">edit</button>
+    </span>
+  );
+}
+
 // Helpers for parent/child rollups.
 const isParent = (k) => FAMILY_CATS.some(c => c.parent === k);
 const childrenOf = (parentKey) => FAMILY_CATS.filter(c => c.parent === parentKey);
@@ -519,12 +555,32 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
     await refreshActuals();
   };
 
+  const renameVendor = async (vendorKey, newName) => {
+    await fetch("/api/actuals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vendor_key: vendorKey, name: newName }),
+    });
+    await refreshActuals();
+  };
+
+  const renameTx = async (txId, newDesc) => {
+    await fetch("/api/actuals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tx_id: txId, desc: newDesc }),
+    });
+    await refreshActuals();
+  };
+
   return (
     <>
       {pendingTxs.length > 0 && (
-        <ApprovalCard pendingTxs={pendingTxs} onApprove={async (txId, cat, vendorKey) => {
-          await moveTx(txId, cat, vendorKey);
-        }} />
+        <ApprovalCard pendingTxs={pendingTxs}
+          onApprove={async (txId, cat, vendorKey) => { await moveTx(txId, cat, vendorKey); }}
+          onRenameVendor={renameVendor}
+          onRenameTx={renameTx}
+        />
       )}
 
       <div className="pnl-catlist">
@@ -595,7 +651,7 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
                             <span className="pnl-vendor-caret">·</span>
                           )}
                           <div className="pnl-vendor-mid">
-                            <span className="pnl-vendor-name">{v.name}</span>
+                            <EditableText value={v.name} onSave={n => renameVendor(v.key, n)} className="pnl-vendor-name" />
                             <span className="pnl-vendor-meta">{vTxs.length} charge{vTxs.length===1?"":"s"}{dateRange ? ` · ${dateRange}` : ""}</span>
                           </div>
                           <select className="pnl-vendor-select" value={c.key} onChange={e => moveVendor(v.key, e.target.value)}>
@@ -608,7 +664,7 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
                             {vTxs.map(tx => (
                               <div key={tx.id} className="pnl-tx-row">
                                 <div className="pnl-tx-date mono">{fmtTxDate(tx.date)}</div>
-                                <div className="pnl-tx-desc">{tx.desc}</div>
+                                <EditableText value={tx.desc} onSave={n => renameTx(tx.id, n)} className="pnl-tx-desc" />
                                 <select className="pnl-tx-select" value={tx.cat} onChange={e => moveTx(tx.id, e.target.value, null)}>
                                   {FAMILY_CATS.map(o => <option key={o.key} value={o.key}>{o.parent ? "\u00A0\u00A0\u2014 " + o.label : o.label}</option>)}
                                 </select>
@@ -639,7 +695,7 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
   );
 }
 
-function ApprovalCard({ pendingTxs, onApprove }) {
+function ApprovalCard({ pendingTxs, onApprove, onRenameVendor, onRenameTx }) {
   const [bulkBusy, setBulkBusy] = useState(false);
   const withGuesses = pendingTxs.filter(t => t.suggestion);
   const approveAll = async () => {
@@ -669,7 +725,11 @@ function ApprovalCard({ pendingTxs, onApprove }) {
       </div>
       <div className="approval-list">
         {pendingTxs.slice(0, 25).map(tx => (
-          <ApprovalRow key={tx.id} tx={tx} onApprove={async (cat) => onApprove(tx.id, cat, tx.vendorKey)} />
+          <ApprovalRow key={tx.id} tx={tx}
+            onApprove={async (cat) => onApprove(tx.id, cat, tx.vendorKey)}
+            onRenameVendor={async (n) => onRenameVendor(tx.vendorKey, n)}
+            onRenameTx={async (n) => onRenameTx(tx.id, n)}
+          />
         ))}
       </div>
       {pendingTxs.length > 25 && (
@@ -679,7 +739,7 @@ function ApprovalCard({ pendingTxs, onApprove }) {
   );
 }
 
-function ApprovalRow({ tx, onApprove }) {
+function ApprovalRow({ tx, onApprove, onRenameVendor, onRenameTx }) {
   const [cat, setCat] = useState(tx.suggestion || "");
   const [busy, setBusy] = useState(false);
   const fmtDate = (d) => { if (!d) return ""; const p = d.split("-"); return p.length === 3 ? p[1]+"/"+p[2] : d; };
@@ -692,8 +752,8 @@ function ApprovalRow({ tx, onApprove }) {
     <div className="approval-row">
       <div className="approval-row-date">{fmtDate(tx.date)}</div>
       <div className="approval-row-vendor">
-        <div className="approval-row-name">{tx.vendorName}</div>
-        <div className="approval-row-desc">{tx.desc}</div>
+        <EditableText value={tx.vendorName} onSave={onRenameVendor} className="approval-row-name" />
+        <EditableText value={tx.desc} onSave={onRenameTx} className="approval-row-desc" />
       </div>
       <div className="approval-row-amount">{fmt(tx.amount)}</div>
       <select className="approval-row-select" value={cat} onChange={e => setCat(e.target.value)}>

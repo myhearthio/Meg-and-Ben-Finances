@@ -81,6 +81,24 @@ body {
   padding: 6px 12px; cursor: pointer; font-size: 12px; color: var(--text-muted);
 }
 .refresh-btn:hover { background: var(--panel-2); }
+
+.year-switch {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.year-btn {
+  background: transparent;
+  border: none;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.year-btn:hover { background: var(--panel-2); color: var(--text); }
+.year-btn.active { background: var(--text); color: white; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
 .status-on { background: var(--green); }
 .status-off { background: var(--red-light); }

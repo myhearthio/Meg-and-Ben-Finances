@@ -415,22 +415,27 @@ function BudgetView({ snap }) {
   useEffect(() => { localStorage.setItem("mb_year", year); }, [year]);
 
   useEffect(() => {
-    fetch("/api/forecast").then(r => r.json()).then(j => setForecast(j || {})).catch(() => {});
-  }, []);
+    fetch("/api/forecast?year=" + year).then(r => r.json()).then(j => setForecast(j || {})).catch(() => {});
+  }, [year]);
 
   useEffect(() => {
     fetch("/api/actuals?year=" + year).then(r => r.json()).then(j => setActuals(j || { vendors: [], byCategory: {}, total: 0 })).catch(() => {});
   }, [year]);
 
-  const isCurrentYear = String(year) === String(snap.year);
-  const years = [String(snap.year - 2), String(snap.year - 1), String(snap.year)];
+  // 2026+ are editable (we set budget targets for the future).
+  // Years before snap.year are historical (read-only forecast).
+  const nextYear = Number(snap.year) + 1;
+  const yNum = Number(year);
+  const isEditable = yNum >= Number(snap.year);
+  const years = [String(snap.year - 2), String(snap.year - 1), String(snap.year), String(nextYear)];
 
   return (
     <div className="main">
       <div className="page-title">Budget & Expenses</div>
       <div className="page-subtitle">
         Forecast vs actual for {year}.
-        {!isCurrentYear && " (Historical year — actuals only.)"}
+        {!isEditable && " (Historical year — actuals only.)"}
+        {yNum > Number(snap.year) && " (Future year — set targets here; actuals will populate as data arrives.)"}
       </div>
       <div className="year-pills">
         {years.map(y => (
@@ -443,7 +448,7 @@ function BudgetView({ snap }) {
         actuals={actuals}
         setActuals={setActuals}
         year={year}
-        readOnly={!isCurrentYear}
+        readOnly={!isEditable}
       />
     </div>
   );
@@ -521,7 +526,7 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
     await fetch("/api/forecast", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ category: key, amount }),
+      body: JSON.stringify({ category: key, amount, year }),
     });
   };
 

@@ -295,7 +295,22 @@ app.post("/api/plaid/exchange", async (req, res) => {
 
 app.get("/api/plaid/status", async (req, res) => {
   await plaid.ensureTokenLoaded();
-  res.json({ connected: !!plaid.getToken() });
+  const items = plaid.getItems().map(it => ({
+    item_id: it.item_id,
+    institution_name: it.institution_name,
+    added_at: it.added_at,
+  }));
+  res.json({ connected: items.length > 0, items });
+});
+
+app.post("/api/plaid/remove", async (req, res) => {
+  try {
+    const itemId = (req.body && req.body.item_id) || "";
+    if (!itemId) return res.status(400).json({ error: "item_id required" });
+    await plaid.removeItem(itemId);
+    invalidateCache();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post("/api/upload/csv", express.text({ type: "*/*", limit: "25mb" }), async (req, res) => {

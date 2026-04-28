@@ -261,14 +261,40 @@ function Sidebar({ snap, plaidStatus, onPlaidChanged }) {
       </div>
 
       <div className="sidebar-block">
-        <div className="sidebar-label">Connection</div>
-        <PlaidConnectButton connected={plaidStatus.connected} onChanged={onPlaidChanged} />
+        <div className="sidebar-label">Connected banks</div>
+        {(plaidStatus.items || []).length === 0 && (
+          <div style={{ fontSize: 12, color: "#888", padding: "4px 0 8px" }}>
+            No banks linked yet.
+          </div>
+        )}
+        {(plaidStatus.items || []).map((it) => (
+          <div key={it.item_id} className="account-row" style={{ alignItems: "center" }}>
+            <div>
+              <div className="account-name">{it.institution_name}</div>
+              <div className="account-name-sub">linked {(it.added_at || "").slice(0,10)}</div>
+            </div>
+            <button
+              className="connect-btn secondary"
+              style={{ padding: "4px 8px", fontSize: 11, width: "auto" }}
+              onClick={async () => {
+                if (!confirm(`Disconnect ${it.institution_name}? Transactions will stop syncing.`)) return;
+                await fetch("/api/plaid/remove", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ item_id: it.item_id }),
+                });
+                onPlaidChanged();
+              }}
+            >Remove</button>
+          </div>
+        ))}
+        <PlaidConnectButton hasItems={(plaidStatus.items || []).length > 0} onChanged={onPlaidChanged} />
       </div>
     </div>
   );
 }
 
-function PlaidConnectButton({ connected, onChanged }) {
+function PlaidConnectButton({ hasItems, onChanged }) {
   const [busy, setBusy] = useState(false);
   const connect = async () => {
     setBusy(true);
@@ -293,8 +319,8 @@ function PlaidConnectButton({ connected, onChanged }) {
     }
   };
   return (
-    <button className={"connect-btn" + (connected ? " secondary" : "")} onClick={connect} disabled={busy}>
-      {busy ? "…" : (connected ? "Relink bank" : "Connect a bank")}
+    <button className="connect-btn" style={{ marginTop: 8 }} onClick={connect} disabled={busy}>
+      {busy ? "…" : (hasItems ? "+ Connect another bank" : "Connect a bank")}
     </button>
   );
 }

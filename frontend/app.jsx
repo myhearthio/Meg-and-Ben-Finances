@@ -39,6 +39,8 @@ const FAMILY_CATS = [
 
   { key: "entertainment", label: "Entertainment & Subscriptions" },
   { key: "gifts_charity", label: "Gifts & Charity" },
+  { key: "taxes_professional", label: "Taxes & Professional Services" },
+  { key: "needs_review", label: "Needs Review" },
   { key: "other", label: "Other" },
   { key: "excluded", label: "Excluded (paid from savings/investments)", isExcluded: true },
 ];

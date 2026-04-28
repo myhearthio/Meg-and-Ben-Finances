@@ -9,6 +9,7 @@ const FAMILY_CATS = [
   "housing", "utilities", "groceries", "dining", "transportation",
   "health", "shopping", "travel", "entertainment", "gifts_charity",
   "kids_activities", "childcare", "education",
+  "childcare_babysitters", "childcare_nanny", "childcare_other",
   "taxes_professional", "needs_review",
   "other", "excluded",
 ];

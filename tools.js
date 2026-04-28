@@ -8,7 +8,7 @@ const db = require("./data");
 const FAMILY_CATS = [
   "housing", "utilities", "groceries", "dining", "transportation",
   "health", "shopping", "travel", "entertainment", "gifts_charity",
-  "kids_activities", "education",
+  "kids_activities", "childcare", "education",
   "other", "excluded",
 ];
 

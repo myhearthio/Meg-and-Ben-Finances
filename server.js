@@ -41,6 +41,53 @@ let snapCache = new Map(); // year -> { data, ts, inflight }
 const CACHE_MS = 60_000;
 function invalidateCache() { snapCache = new Map(); }
 
+// ---- categories (Postgres-backed; client-managed) ----
+// kv key "family-categories" stores the full ordered list. If empty, we seed
+// with DEFAULT_CATEGORIES. Schema per item: { key, label, parent?, isExcluded? }
+const CATEGORIES_KEY = "family-categories";
+const DEFAULT_CATEGORIES = [
+  { key: "housing", label: "Housing" },
+  { key: "utilities", label: "Utilities" },
+  { key: "groceries", label: "Groceries" },
+  { key: "dining", label: "Dining & Takeout" },
+  { key: "transportation", label: "Transportation" },
+  { key: "health", label: "Health" },
+  { key: "health_megan", label: "Megan", parent: "health" },
+  { key: "health_ben", label: "Ben", parent: "health" },
+  { key: "health_children", label: "Children", parent: "health" },
+  { key: "shopping", label: "Shopping" },
+  { key: "shopping_megan", label: "Megan", parent: "shopping" },
+  { key: "shopping_ben", label: "Ben", parent: "shopping" },
+  { key: "shopping_children", label: "Children", parent: "shopping" },
+  { key: "kids_activities", label: "Children's Activities" },
+  { key: "childcare", label: "Childcare" },
+  { key: "childcare_babysitters", label: "Babysitters", parent: "childcare" },
+  { key: "childcare_nanny", label: "Nanny", parent: "childcare" },
+  { key: "childcare_erev", label: "Erev", parent: "childcare" },
+  { key: "childcare_ronan", label: "Ronan", parent: "childcare" },
+  { key: "childcare_caleb", label: "Caleb", parent: "childcare" },
+  { key: "childcare_other", label: "Other", parent: "childcare" },
+  { key: "education", label: "Education" },
+  { key: "travel", label: "Travel & Vacation" },
+  { key: "travel_general", label: "General (lodging, flights, etc.)", parent: "travel" },
+  { key: "travel_dining", label: "Dining", parent: "travel" },
+  { key: "travel_activities", label: "Activities", parent: "travel" },
+  { key: "travel_childcare", label: "Childcare", parent: "travel" },
+  { key: "entertainment", label: "Entertainment & Subscriptions" },
+  { key: "gifts_charity", label: "Gifts & Charity" },
+  { key: "taxes_professional", label: "Taxes & Professional Services" },
+  { key: "needs_review", label: "Needs Review" },
+  { key: "other", label: "Other" },
+  { key: "excluded", label: "Excluded (paid from savings/investments)", isExcluded: true },
+];
+async function _readCategories() {
+  const saved = await db.kvGet(CATEGORIES_KEY, null);
+  if (Array.isArray(saved) && saved.length) return saved;
+  await db.kvSet(CATEGORIES_KEY, DEFAULT_CATEGORIES);
+  return DEFAULT_CATEGORIES;
+}
+async function _writeCategories(list) { await db.kvSet(CATEGORIES_KEY, list); }
+
 // ---- override + forecast plumbing (Postgres-backed) ----
 const OVERRIDES_KEY = "family-overrides";
 const FORECAST_KEY = "family-forecast"; // legacy, treated as 2025
@@ -388,6 +435,47 @@ app.post("/api/actuals", async (req, res) => {
     if (!handled) return res.status(400).json({ error: "bad payload" });
     invalidateCache();
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/categories", async (req, res) => {
+  try { res.json({ categories: await _readCategories() }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Replace the entire categories list. Body: { categories: [...] }.
+// Validation: every item needs a key + label. Duplicate keys rejected.
+// Parents must reference an existing key.
+app.post("/api/categories", async (req, res) => {
+  try {
+    const list = (req.body && req.body.categories) || [];
+    if (!Array.isArray(list) || list.length === 0) {
+      return res.status(400).json({ error: "categories must be a non-empty array" });
+    }
+    const seen = new Set();
+    const cleaned = [];
+    for (const c of list) {
+      if (!c || typeof c.key !== "string" || !c.key.trim()) {
+        return res.status(400).json({ error: "each category needs a key" });
+      }
+      const key = c.key.trim();
+      if (seen.has(key)) return res.status(400).json({ error: `duplicate key: ${key}` });
+      seen.add(key);
+      const label = (c.label && String(c.label).trim()) || key;
+      const item = { key, label };
+      if (c.parent) item.parent = String(c.parent);
+      if (c.isExcluded) item.isExcluded = true;
+      cleaned.push(item);
+    }
+    // Parent integrity check
+    for (const c of cleaned) {
+      if (c.parent && !seen.has(c.parent)) {
+        return res.status(400).json({ error: `parent ${c.parent} not found for ${c.key}` });
+      }
+    }
+    await _writeCategories(cleaned);
+    invalidateCache();
+    res.json({ ok: true, categories: cleaned });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

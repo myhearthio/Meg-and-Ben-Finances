@@ -153,7 +153,7 @@ async function anthropicCall(body) {
 
 async function chat(userMessages, snapshot) {
   const system = await buildSystemPrompt(snapshot);
-  const toolDefs = tools.getToolDefinitions();
+  const toolDefs = await tools.getToolDefinitions();
   const toolCalls = [];
 
   let messages = userMessages.map(m => ({ role: m.role, content: m.content }));

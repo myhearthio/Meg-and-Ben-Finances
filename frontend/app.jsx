@@ -6,43 +6,23 @@ const { useState, useEffect, useCallback, useRef } = React;
 const API = "";  // same origin
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-// Categories. Subcategories carry a `parent` key — they roll up into the parent's total
-// for KPIs, but each owns its own forecast. Parent rows display the rollup actuals + sum-of-children forecast.
+// Categories — loaded from /api/categories on boot. The seed list below is a
+// fallback only (used if the server returns nothing). The mutable array
+// FAMILY_CATS is replaced in-place after fetch so all references stay live.
+// Subcategories carry a `parent` key — they roll up into the parent's total
+// for KPIs, but each owns its own forecast.
 const FAMILY_CATS = [
   { key: "housing", label: "Housing" },
   { key: "utilities", label: "Utilities" },
   { key: "groceries", label: "Groceries" },
   { key: "dining", label: "Dining & Takeout" },
   { key: "transportation", label: "Transportation" },
-
   { key: "health", label: "Health" },
-  { key: "health_megan", label: "Megan", parent: "health" },
-  { key: "health_ben", label: "Ben", parent: "health" },
-  { key: "health_children", label: "Children", parent: "health" },
-
   { key: "shopping", label: "Shopping" },
-  { key: "shopping_megan", label: "Megan", parent: "shopping" },
-  { key: "shopping_ben", label: "Ben", parent: "shopping" },
-  { key: "shopping_children", label: "Children", parent: "shopping" },
-
   { key: "kids_activities", label: "Children's Activities" },
-
   { key: "childcare", label: "Childcare" },
-  { key: "childcare_babysitters", label: "Babysitters", parent: "childcare" },
-  { key: "childcare_nanny", label: "Nanny", parent: "childcare" },
-  { key: "childcare_erev", label: "Erev", parent: "childcare" },
-  { key: "childcare_ronan", label: "Ronan", parent: "childcare" },
-  { key: "childcare_caleb", label: "Caleb", parent: "childcare" },
-  { key: "childcare_other", label: "Other", parent: "childcare" },
-
   { key: "education", label: "Education" },
-
   { key: "travel", label: "Travel & Vacation" },
-  { key: "travel_general", label: "General (lodging, flights, etc.)", parent: "travel" },
-  { key: "travel_dining", label: "Dining", parent: "travel" },
-  { key: "travel_activities", label: "Activities", parent: "travel" },
-  { key: "travel_childcare", label: "Childcare", parent: "travel" },
-
   { key: "entertainment", label: "Entertainment & Subscriptions" },
   { key: "gifts_charity", label: "Gifts & Charity" },
   { key: "taxes_professional", label: "Taxes & Professional Services" },
@@ -50,6 +30,40 @@ const FAMILY_CATS = [
   { key: "other", label: "Other" },
   { key: "excluded", label: "Excluded (paid from savings/investments)", isExcluded: true },
 ];
+
+// Replace FAMILY_CATS contents in place (so all closures over it pick up changes)
+// and notify subscribers to re-render.
+const _catSubs = new Set();
+function setFamilyCats(next) {
+  if (!Array.isArray(next) || !next.length) return;
+  FAMILY_CATS.length = 0;
+  for (const c of next) FAMILY_CATS.push(c);
+  for (const fn of _catSubs) { try { fn(); } catch (e) {} }
+}
+function useFamilyCats() {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const fn = () => setTick(t => t + 1);
+    _catSubs.add(fn);
+    return () => _catSubs.delete(fn);
+  }, []);
+  return FAMILY_CATS;
+}
+async function fetchCategories() {
+  try {
+    const r = await fetch("/api/categories").then(r => r.json());
+    if (r && Array.isArray(r.categories)) setFamilyCats(r.categories);
+  } catch (e) { console.warn("[cats] fetch failed", e); }
+}
+async function saveCategories(list) {
+  const r = await fetch("/api/categories", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ categories: list }),
+  }).then(r => r.json());
+  if (r.error) throw new Error(r.error);
+  if (Array.isArray(r.categories)) setFamilyCats(r.categories);
+}
 
 // Inline-editable text. Click pencil → input; Enter saves, Esc cancels.
 function EditableText({ value, onSave, className }) {
@@ -135,7 +149,10 @@ function App() {
     }
   }, [year]);
 
+  // Subscribe so a category edit forces a re-render of the whole tree.
+  useFamilyCats();
   useEffect(() => {
+    fetchCategories();
     load();
     // Listen for navigation actions from chat
     const h = (e) => { if (e.detail) setTab(e.detail); };
@@ -169,6 +186,7 @@ function TopBar({ refreshedAt, onRefresh, plaidStatus, tab, onTabChange, year, o
     { key: "dashboard", label: "Dashboard" },
     { key: "budget", label: "Budget & Expenses" },
     { key: "accounts", label: "Accounts" },
+    { key: "settings", label: "Settings" },
   ];
   return (
     <div className="topbar">
@@ -284,6 +302,7 @@ function PlaidConnectButton({ connected, onChanged }) {
 function Main({ snap, tab }) {
   if (tab === "budget") return <BudgetView snap={snap} />;
   if (tab === "accounts") return <AccountsView snap={snap} />;
+  if (tab === "settings") return <SettingsView />;
   return <Dashboard snap={snap} />;
 }
 
@@ -329,6 +348,7 @@ function KpiRow({ snap }) {
 }
 
 function MonthlyCharts({ snap }) {
+  useFamilyCats();
   const [forecast, setForecast] = useState({});
   useEffect(() => {
     fetch("/api/forecast").then(r => r.json()).then(j => setForecast(j || {})).catch(() => {});
@@ -428,6 +448,7 @@ function Chart({ title, data, color, signed, totalLabel, total, annualTarget }) 
 }
 
 function BudgetView({ snap }) {
+  useFamilyCats();
   const [year, setYear] = useState(() => localStorage.getItem("mb_year") || String(snap.year));
   const [forecast, setForecast] = useState({});
   const [actuals, setActuals] = useState({ vendors: [], byCategory: {}, total: 0 });
@@ -776,6 +797,7 @@ function ApprovalCard({ pendingTxs, onApprove, onRenameVendor, onRenameTx }) {
 }
 
 function ApprovalRow({ tx, onApprove, onRenameVendor, onRenameTx }) {
+  useFamilyCats();
   const [cat, setCat] = useState(tx.suggestion || "");
   const [busy, setBusy] = useState(false);
   const fmtDate = (d) => { if (!d) return ""; const p = d.split("-"); return p.length === 3 ? p[1]+"/"+p[2] : d; };
@@ -973,6 +995,142 @@ function ChatPanel() {
         <input value={input} onChange={e => setInput(e.target.value)} placeholder="Ask Connor anything…" />
         <button type="submit" disabled={busy}>Send</button>
       </form>
+    </div>
+  );
+}
+
+// ---- Settings ----
+// Lightweight category manager: rename labels, add new top-level categories,
+// add subcategories under an existing parent. Deleting/reassigning is
+// intentionally not exposed yet — too easy to strand existing tx overrides.
+function SettingsView() {
+  const cats = useFamilyCats();
+  const [draft, setDraft] = useState(() => cats.map(c => ({ ...c })));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newLabel, setNewLabel] = useState("");
+  const [newParent, setNewParent] = useState("");
+
+  // Re-sync local draft when server state changes (e.g. after save)
+  useEffect(() => { setDraft(cats.map(c => ({ ...c }))); }, [cats]);
+
+  const renameLocal = (idx, label) => {
+    setDraft(d => d.map((c, i) => i === idx ? { ...c, label } : c));
+  };
+
+  const addCategory = () => {
+    const label = newLabel.trim();
+    if (!label) return;
+    // Auto-generate a key from the label.
+    const baseKey = (newParent ? newParent + "_" : "") + label.toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    let key = baseKey || ("cat_" + Date.now());
+    let n = 2;
+    const taken = new Set(draft.map(c => c.key));
+    while (taken.has(key)) { key = baseKey + "_" + n++; }
+    const item = { key, label };
+    if (newParent) item.parent = newParent;
+    setDraft(d => [...d, item]);
+    setNewLabel("");
+    setNewParent("");
+    setShowAdd(false);
+  };
+
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      await saveCategories(draft);
+      setMsg("Saved.");
+      setTimeout(() => setMsg(null), 2000);
+    } catch (e) {
+      setMsg("Error: " + e.message);
+    } finally { setBusy(false); }
+  };
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(cats);
+  // Top-level categories make valid parents for new subcategories.
+  const topLevel = draft.filter(c => !c.parent && !c.isExcluded);
+
+  return (
+    <div className="main">
+      <div className="page-title">Settings</div>
+      <div className="page-subtitle">Manage your spending categories</div>
+
+      <div className="panel" style={{ marginTop: 24 }}>
+        <div className="panel-head">
+          <div className="panel-title">Categories</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="connect-btn secondary" onClick={() => setShowAdd(s => !s)}>
+              {showAdd ? "Cancel" : "+ Add category"}
+            </button>
+            <button
+              className="connect-btn"
+              onClick={save}
+              disabled={!dirty || busy}
+              style={{ opacity: (!dirty || busy) ? 0.5 : 1 }}
+            >{busy ? "Saving…" : "Save changes"}</button>
+          </div>
+        </div>
+
+        {showAdd && (
+          <div style={{ display: "flex", gap: 8, padding: "12px 16px", borderBottom: "1px solid #eee", alignItems: "center", flexWrap: "wrap" }}>
+            <input
+              autoFocus
+              placeholder="Category name (e.g. Pets)"
+              value={newLabel}
+              onChange={e => setNewLabel(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") addCategory(); }}
+              style={{ flex: "1 1 240px", minWidth: 0, padding: "6px 10px", fontSize: 14, border: "1px solid #ddd", borderRadius: 4 }}
+            />
+            <select
+              value={newParent}
+              onChange={e => setNewParent(e.target.value)}
+              style={{ padding: "6px 10px", fontSize: 14, border: "1px solid #ddd", borderRadius: 4 }}
+            >
+              <option value="">Top-level category</option>
+              {topLevel.map(c => <option key={c.key} value={c.key}>Subcategory of: {c.label}</option>)}
+            </select>
+            <button className="connect-btn" onClick={addCategory} disabled={!newLabel.trim()}>Add</button>
+          </div>
+        )}
+
+        {msg && (
+          <div style={{ padding: "8px 16px", color: msg.startsWith("Error") ? "#c33" : "#0a7", fontSize: 13 }}>{msg}</div>
+        )}
+
+        <div style={{ padding: "8px 0" }}>
+          {draft.map((c, idx) => (
+            <div key={c.key} style={{
+              display: "flex", alignItems: "center", gap: 12,
+              padding: "8px 16px",
+              borderTop: idx === 0 ? "none" : "1px solid #f3f3f3",
+              paddingLeft: c.parent ? 40 : 16,
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <input
+                  value={c.label}
+                  onChange={e => renameLocal(idx, e.target.value)}
+                  style={{
+                    width: "100%", padding: "4px 8px", fontSize: 14,
+                    border: "1px solid transparent", borderRadius: 4,
+                    background: "transparent",
+                  }}
+                  onFocus={e => e.target.style.border = "1px solid #ddd"}
+                  onBlur={e => e.target.style.border = "1px solid transparent"}
+                />
+              </div>
+              <div style={{ fontSize: 11, color: "#999", fontFamily: "monospace" }}>
+                {c.key}{c.parent ? ` · child of ${c.parent}` : ""}{c.isExcluded ? " · excluded" : ""}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ padding: "12px 16px", borderTop: "1px solid #eee", fontSize: 12, color: "#888", lineHeight: 1.6 }}>
+          <strong>Notes:</strong> You can rename labels and add new categories. Renaming a label only changes how it's displayed — existing transactions stay where they are. New categories start empty; assign transactions to them via the Approval Queue or Budget tab. Deleting categories isn't supported yet (it could orphan transactions).
+        </div>
+      </div>
     </div>
   );
 }

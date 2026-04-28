@@ -5,14 +5,22 @@
 // All persistent state reads from Postgres via data.js. NEVER read/write disk.
 const db = require("./data");
 
-const FAMILY_CATS = [
-  "housing", "utilities", "groceries", "dining", "transportation",
-  "health", "shopping", "travel", "entertainment", "gifts_charity",
-  "kids_activities", "childcare", "education",
-  "childcare_babysitters", "childcare_nanny", "childcare_erev", "childcare_ronan", "childcare_caleb", "childcare_other",
-  "taxes_professional", "needs_review",
-  "other", "excluded",
-];
+// Categories are now managed via /api/categories (kv-stored). We read fresh
+// each time so Connor sees newly-added categories without a server restart.
+const CATEGORIES_KEY = "family-categories";
+async function readCategoryKeys() {
+  const list = await db.kvGet(CATEGORIES_KEY, null);
+  if (Array.isArray(list) && list.length) return list.map(c => c.key);
+  // Fallback list — matches DEFAULT_CATEGORIES in server.js.
+  return [
+    "housing", "utilities", "groceries", "dining", "transportation",
+    "health", "shopping", "travel", "entertainment", "gifts_charity",
+    "kids_activities", "childcare", "education",
+    "childcare_babysitters", "childcare_nanny", "childcare_erev", "childcare_ronan", "childcare_caleb", "childcare_other",
+    "taxes_professional", "needs_review",
+    "other", "excluded",
+  ];
+}
 
 const OVERRIDES_KEY = "family-overrides";
 const FORECAST_KEY = "family-forecast";
@@ -52,7 +60,8 @@ function snapshotYear() {
   return String(Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());
 }
 
-function toolDefs() {
+async function toolDefs() {
+  const cats = await readCategoryKeys();
   return [
     {
       name: "find_transactions",
@@ -80,7 +89,7 @@ function toolDefs() {
     },
     {
       name: "get_category_breakdown",
-      description: `Breakdown for a family category: actual YTD, forecast annual, vendors, optional by-month. Categories: ${FAMILY_CATS.join(", ")}.`,
+      description: `Breakdown for a family category: actual YTD, forecast annual, vendors, optional by-month. Categories: ${cats.join(", ")}.`,
       input_schema: {
         type: "object",
         properties: {
@@ -305,7 +314,8 @@ async function t_get_top_expenses(input, snap) {
 
 async function t_get_forecast_vs_actual(input, snap) {
   const out = [];
-  for (const c of FAMILY_CATS) {
+  const cats = await readCategoryKeys();
+  for (const c of cats) {
     if (c === "excluded") continue;
     const b = await t_get_category_breakdown({ category: c }, snap);
     out.push({

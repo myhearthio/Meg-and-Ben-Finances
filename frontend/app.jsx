@@ -30,6 +30,9 @@ const FAMILY_CATS = [
   { key: "childcare", label: "Childcare" },
   { key: "childcare_babysitters", label: "Babysitters", parent: "childcare" },
   { key: "childcare_nanny", label: "Nanny", parent: "childcare" },
+  { key: "childcare_erev", label: "Erev", parent: "childcare" },
+  { key: "childcare_ronan", label: "Ronan", parent: "childcare" },
+  { key: "childcare_caleb", label: "Caleb", parent: "childcare" },
   { key: "childcare_other", label: "Other", parent: "childcare" },
 
   { key: "education", label: "Education" },

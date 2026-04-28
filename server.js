@@ -541,6 +541,23 @@ app.post("/api/actuals", async (req, res) => {
         else delete obj.__names[body.vendor_key];
       } else if (body.vendor_key && body.category) {
         obj[body.vendor_key] = body.category;
+        // Clear any per-tx overrides for this vendor so the new vendor cat
+        // actually applies. (Otherwise stale per-tx settings — e.g. from when
+        // the vendor used to be "excluded" — keep individual txs frozen.)
+        if (obj.__tx) {
+          const snap = await getSnapshot(false).catch(() => null);
+          const plaidTx = (snap && snap._plaidTx) || [];
+          const vendorTxIds = new Set();
+          for (const t of plaidTx) {
+            const raw = String(t.name || "").trim();
+            const vKey = normalizeVendor(raw);
+            if (vKey === body.vendor_key) {
+              const txId = (t.date || "") + "|" + Number(t.amount) + "|" + raw.slice(0, 60);
+              vendorTxIds.add(txId);
+            }
+          }
+          for (const id of vendorTxIds) delete obj.__tx[id];
+        }
       } else if (body.vendor && body.category) {
         obj[body.vendor] = body.category;
       } else { handled = false; }

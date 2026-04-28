@@ -432,8 +432,14 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals }) {
     }
     return out;
   })();
+  // Grand actuals = sum of every non-excluded category (parents AND leaves).
+  // Transactions can land directly on a parent (e.g. "shopping" w/o a person tag)
+  // OR on a leaf (e.g. "shopping_megan"). Skipping parents would silently drop
+  // every untagged transaction. The parent display row already adds children
+  // INTO it via actualByCat, so we sum rawActual(c.key) here (raw, not rolled-up)
+  // to count each dollar exactly once.
   const actualGrand = FAMILY_CATS
-    .filter(c => !c.isExcluded && !isParent(c.key))
+    .filter(c => !c.isExcluded)
     .reduce((s, c) => s + rawActual(c.key), 0);
 
   const pendingTxs = [];

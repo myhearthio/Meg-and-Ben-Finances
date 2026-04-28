@@ -573,11 +573,32 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals }) {
 }
 
 function ApprovalCard({ pendingTxs, onApprove }) {
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const withGuesses = pendingTxs.filter(t => t.suggestion);
+  const approveAll = async () => {
+    if (bulkBusy || withGuesses.length === 0) return;
+    setBulkBusy(true);
+    // Run sequentially to keep server happy + cache invalidation correct.
+    for (const tx of withGuesses) {
+      await onApprove(tx.id, tx.suggestion, tx.vendorKey);
+    }
+    setBulkBusy(false);
+  };
   return (
     <div className="approval-card">
       <div className="approval-head">
         <div className="approval-title">Approval Queue</div>
         <div className="approval-sub">{pendingTxs.length} uncategorized transaction{pendingTxs.length === 1 ? "" : "s"}</div>
+        {withGuesses.length > 0 && (
+          <button
+            className={"approval-bulk-btn" + (bulkBusy ? " disabled" : "")}
+            disabled={bulkBusy}
+            onClick={approveAll}
+            style={{ marginLeft: "auto", padding: "8px 14px", border: "1px solid #d4d4d0", background: "#fafaf8", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: bulkBusy ? "wait" : "pointer" }}
+          >
+            {bulkBusy ? `Approving… (${withGuesses.length} left)` : `Approve all ${withGuesses.length} with guesses`}
+          </button>
+        )}
       </div>
       <div className="approval-list">
         {pendingTxs.slice(0, 25).map(tx => (

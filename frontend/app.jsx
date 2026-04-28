@@ -50,6 +50,13 @@ const fmt = (n) => {
   const abs = Math.abs(Math.round(n));
   return sign + "$" + abs.toLocaleString();
 };
+
+const fmtTxDate = (d) => {
+  if (!d) return "";
+  const p = String(d).split("-");
+  if (p.length !== 3) return d;
+  return `${p[1]}/${p[2]}/${p[0].slice(2)}`;
+};
 const fmtPct = (n) => (n == null || isNaN(n)) ? "0%" : `${n}%`;
 
 function App() {
@@ -406,7 +413,9 @@ function BudgetHistorical({ year, actuals }) {
 
 function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals }) {
   const [expanded, setExpanded] = useState({});
+  const [expandedVendors, setExpandedVendors] = useState({});
   const toggle = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
+  const toggleVendor = (vk) => setExpandedVendors(e => ({ ...e, [vk]: !e[vk] }));
 
   const rawForecast = (k) => Number(forecast[k] || 0);
   // Effective forecast for a row: parents = sum of children + own (if any); leafs = own.
@@ -522,17 +531,21 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals }) {
             <div key={c.key} className={"pnl-cat " + (isOpen ? "pnl-cat-open " : "") + (c.isExcluded ? "pnl-cat-excluded" : "") + (isSub ? " pnl-cat-sub" : "") + (isParentRow ? " pnl-cat-parent" : "")} style={isSub ? { paddingLeft: 28 } : null}>
               <div className="pnl-cat-row">
                 {canExpand ? (
-                  <button className="pnl-cat-caret-btn" onClick={() => toggle(c.key)}>{isOpen ? "▾" : "▸"}</button>
+                  <button className="pnl-cat-caret-btn" onClick={() => toggle(c.key)} aria-label={isOpen ? "Collapse" : "Expand"}>{isOpen ? "▾" : "▸"}</button>
                 ) : (
                   <span className="pnl-cat-caret">·</span>
                 )}
-                <span className="pnl-cat-name" style={isParentRow ? { fontWeight: 600 } : (isSub ? { color: "#555" } : null)}>{c.label}</span>
+                <span className={"pnl-cat-name" + (isParentRow ? " is-parent" : "") + (isSub ? " is-sub" : "")}>{c.label}</span>
                 {c.isExcluded ? (
-                  <span style={{ color: "#888", fontSize: 11 }}>not counted</span>
+                  <span className="pnl-cat-not-counted">not counted</span>
                 ) : (
                   <div className="pnl-progress-wrap">
                     <div className={"pnl-progress-bar" + (isOver ? " over" : "")} style={{ width: `${pct}%` }}></div>
-                    {target > 0 && <span className="pnl-progress-meta mono">{Math.round(pct)}%</span>}
+                    {target > 0 && (
+                      <span className="pnl-progress-text mono">
+                        {Math.round(pct)}% — {fmt(Math.max(0, target - actual))} left
+                      </span>
+                    )}
                   </div>
                 )}
                 <span className="pnl-cat-actual mono">{fmt(actual)}</span>
@@ -547,18 +560,49 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals }) {
               {isOpen && (
                 <div className="pnl-vendors">
                   {vendors.length === 0 && <div className="pnl-vendor-empty">No vendors in this category yet.</div>}
-                  {vendors.map((v, i) => (
-                    <div key={v.key + ":" + i} className="pnl-vendor-row">
-                      <div>
-                        <div style={{ fontWeight: 500 }}>{v.name}</div>
-                        <div style={{ color: "#888", fontSize: 11 }}>{v.count} charge{v.count===1?"":"s"}</div>
+                  {vendors.map((v, i) => {
+                    const vTxs = (v.txs || []).filter(t => t.cat === c.key);
+                    const dates = vTxs.map(t => t.date).filter(Boolean).sort();
+                    const first = dates[0], last = dates[dates.length - 1];
+                    const dateRange = first && last
+                      ? (first === last ? fmtTxDate(first) : `${fmtTxDate(first)} – ${fmtTxDate(last)}`)
+                      : "";
+                    const vKey = v.key + ":" + c.key;
+                    const vOpen = !!expandedVendors[vKey];
+                    return (
+                      <div key={vKey} className={"pnl-vendor" + (vOpen ? " pnl-vendor-open" : "")}>
+                        <div className="pnl-vendor-row">
+                          {vTxs.length > 0 ? (
+                            <button className="pnl-vendor-caret-btn" onClick={() => toggleVendor(vKey)} aria-label={vOpen ? "Collapse charges" : "Expand charges"}>{vOpen ? "▾" : "▸"}</button>
+                          ) : (
+                            <span className="pnl-vendor-caret">·</span>
+                          )}
+                          <div className="pnl-vendor-mid">
+                            <span className="pnl-vendor-name">{v.name}</span>
+                            <span className="pnl-vendor-meta">{vTxs.length} charge{vTxs.length===1?"":"s"}{dateRange ? ` · ${dateRange}` : ""}</span>
+                          </div>
+                          <select className="pnl-vendor-select" value={c.key} onChange={e => moveVendor(v.key, e.target.value)}>
+                            {FAMILY_CATS.map(o => <option key={o.key} value={o.key}>{o.parent ? "\u00A0\u00A0\u2014 " + o.label : o.label}</option>)}
+                          </select>
+                          <div className="pnl-vendor-amount mono">{fmt(v.amount)}</div>
+                        </div>
+                        {vOpen && (
+                          <div className="pnl-tx-list">
+                            {vTxs.map(tx => (
+                              <div key={tx.id} className="pnl-tx-row">
+                                <div className="pnl-tx-date mono">{fmtTxDate(tx.date)}</div>
+                                <div className="pnl-tx-desc">{tx.desc}</div>
+                                <select className="pnl-tx-select" value={tx.cat} onChange={e => moveTx(tx.id, e.target.value, null)}>
+                                  {FAMILY_CATS.map(o => <option key={o.key} value={o.key}>{o.parent ? "\u00A0\u00A0\u2014 " + o.label : o.label}</option>)}
+                                </select>
+                                <div className="pnl-tx-amount mono">{fmt(tx.amount)}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                      <div className="pnl-vendor-amount">{fmt(v.amount)}</div>
-                      <select value={c.key} onChange={e => moveVendor(v.key, e.target.value)} style={{padding: "4px 6px", fontSize: 11}}>
-                        {FAMILY_CATS.map(o => <option key={o.key} value={o.key}>{o.parent ? "\u00A0\u00A0\u2014 " + o.label : o.label}</option>)}
-                      </select>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

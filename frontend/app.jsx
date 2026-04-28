@@ -533,11 +533,14 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
           const actual = actualByCat[c.key] || 0;
           const isOpen = !!expanded[c.key];
           const vendors = (vendorsByCat[c.key] || []).sort((a, b) => b.amount - a.amount);
-          const canExpand = vendors.length > 0;
-          const pct = target > 0 ? Math.min(100, (actual / target) * 100) : 0;
-          const isOver = target > 0 && actual > target;
           const isSub = !!c.parent;
           const isParentRow = isParent(c.key);
+          // Hide subcategory rows when their parent is collapsed.
+          if (isSub && !expanded[c.parent]) return null;
+          // Parent rows are expandable (to show children) even with no direct vendors.
+          const canExpand = vendors.length > 0 || isParentRow;
+          const pct = target > 0 ? Math.min(100, (actual / target) * 100) : 0;
+          const isOver = target > 0 && actual > target;
 
           return (
             <div key={c.key} className={"pnl-cat " + (isOpen ? "pnl-cat-open " : "") + (c.isExcluded ? "pnl-cat-excluded" : "") + (isSub ? " pnl-cat-sub" : "") + (isParentRow ? " pnl-cat-parent" : "")} style={isSub ? { paddingLeft: 28 } : null}>

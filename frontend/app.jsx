@@ -28,6 +28,9 @@ const FAMILY_CATS = [
   { key: "kids_activities", label: "Children's Activities" },
 
   { key: "childcare", label: "Childcare" },
+  { key: "childcare_babysitters", label: "Babysitters", parent: "childcare" },
+  { key: "childcare_nanny", label: "Nanny", parent: "childcare" },
+  { key: "childcare_other", label: "Other", parent: "childcare" },
 
   { key: "education", label: "Education" },
 

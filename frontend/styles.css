@@ -357,6 +357,30 @@ body {
   background: white; outline: none; min-width: 120px; flex: 1;
   text-transform: none; letter-spacing: 0;
 }
+
+/* Approval Queue collapse */
+.approval-collapse-btn {
+  background: transparent; border: 0; cursor: pointer;
+  color: var(--text-subtle); font-size: 14px; padding: 4px 8px;
+  border-radius: 4px; margin-right: 4px;
+}
+.approval-collapse-btn:hover { background: var(--surface-2, #f1f5f9); color: var(--text); }
+.approval-card.approval-collapsed .approval-head { padding-bottom: 0; }
+.editable-wrap .editable-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.editable-wrap .editable-edit {
+  background: transparent; border: 1px solid transparent; color: var(--text-subtle);
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 1px 5px; border-radius: 3px; cursor: pointer; opacity: 0;
+  transition: opacity 120ms ease;
+}
+.editable-wrap:hover .editable-edit { opacity: 1; }
+.editable-wrap .editable-edit:hover { background: var(--surface-2, #f1f5f9); color: var(--text); }
+.editable-input {
+  font: inherit; color: inherit;
+  padding: 2px 6px; border: 1px solid var(--accent, #3b82f6); border-radius: 3px;
+  background: white; outline: none; min-width: 120px; flex: 1;
+  text-transform: none; letter-spacing: 0;
+}
 .pnl-vendor-meta {
   font-size: 11px; color: var(--text-subtle);
   font-family: "JetBrains Mono", monospace;

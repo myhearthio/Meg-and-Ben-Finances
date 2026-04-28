@@ -281,7 +281,7 @@ app.post("/api/forecast", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-async function _buildActuals() {
+async function _buildActuals(yearOverride) {
   const snap = await getSnapshot(false);
   const tx = snap._plaidTx || [];
   const overrides = await _readOverrides();
@@ -289,7 +289,7 @@ async function _buildActuals() {
   const nameOv = overrides.__names || {};
   const txDescOv = overrides.__tx_desc || {};
 
-  const yr = String(Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());
+  const yr = String(yearOverride || Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());
   const unrolledPrefixes = [/^CHECK\b/i];
   const txList = [];
   let txIdx = 0;
@@ -330,7 +330,7 @@ async function _buildActuals() {
 }
 
 app.get("/api/actuals", async (req, res) => {
-  try { res.json(await _buildActuals()); }
+  try { res.json(await _buildActuals(req.query.year ? String(req.query.year) : null)); }
   catch (e) { console.log("actuals err:", e); res.status(500).json({ error: e.message }); }
 });
 

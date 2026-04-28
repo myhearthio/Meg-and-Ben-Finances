@@ -1,16 +1,14 @@
-// Plaid wrapper. Token storage:
-//   env PLAID_ACCESS_TOKEN (preferred for cloud), or secrets/plaid_token.txt (local).
-const fs = require("fs");
-const path = require("path");
+// Plaid wrapper. Token persisted in Postgres (kv key = "plaid_token").
+// Falls back to PLAID_ACCESS_TOKEN env var if set (legacy).
 const { Configuration, PlaidApi, PlaidEnvironments } = require("plaid");
+const db = require("./data");
 
 const CLIENT_ID = process.env.PLAID_CLIENT_ID;
 const SECRET = process.env.PLAID_SECRET;
 const ENV = (process.env.PLAID_ENV || "sandbox").toLowerCase();
-const DATA_ROOT = process.env.DATA_DIR || path.join(__dirname, "secrets");
-const TOKEN_FILE = path.join(DATA_ROOT, "plaid_token.txt");
 
 let memoryToken = process.env.PLAID_ACCESS_TOKEN || null;
+let loaded = false;
 
 const client = new PlaidApi(new Configuration({
   basePath: PlaidEnvironments[ENV] || PlaidEnvironments.sandbox,
@@ -22,26 +20,29 @@ const client = new PlaidApi(new Configuration({
   },
 }));
 
-function getToken() {
-  if (memoryToken) return memoryToken;
-  try {
-    const t = fs.readFileSync(TOKEN_FILE, "utf8").trim();
-    if (t) memoryToken = t;
-    return memoryToken || null;
-  } catch (e) { return null; }
+async function _loadToken() {
+  if (loaded) return memoryToken;
+  if (!memoryToken) {
+    try { memoryToken = (await db.kvGet("plaid_token", null)) || null; } catch (e) { console.log("[plaid] token load err:", e.message); }
+  }
+  loaded = true;
+  return memoryToken;
 }
 
-function setToken(tok) {
+// Sync getter — returns whatever's in memory. Callers that need a guaranteed
+// fresh value should call ensureTokenLoaded() once at boot.
+function getToken() {
+  return memoryToken;
+}
+async function ensureTokenLoaded() {
+  return _loadToken();
+}
+
+async function setToken(tok) {
   memoryToken = tok;
-  try {
-    fs.mkdirSync(path.dirname(TOKEN_FILE), { recursive: true });
-    fs.writeFileSync(TOKEN_FILE, tok);
-  } catch (e) {
-    console.log("Could not persist plaid token to disk:", e.message);
-  }
-  console.log("=== PLAID ACCESS TOKEN (save to PLAID_ACCESS_TOKEN env var on cloud) ===");
-  console.log(tok);
-  console.log("==========================================================================");
+  loaded = true;
+  try { await db.kvSet("plaid_token", tok); }
+  catch (e) { console.log("[plaid] token persist err:", e.message); }
 }
 
 async function createLinkToken(redirectUri) {
@@ -60,34 +61,28 @@ async function createLinkToken(redirectUri) {
 
 async function exchange(publicToken) {
   const r = await client.itemPublicTokenExchange({ public_token: publicToken });
-  setToken(r.data.access_token);
+  await setToken(r.data.access_token);
   return r.data.access_token;
 }
 
 async function getAccounts() {
-  const tok = getToken();
-  if (!tok) return [];
-  const r = await client.accountsGet({ access_token: tok });
+  await _loadToken();
+  if (!memoryToken) return [];
+  const r = await client.accountsGet({ access_token: memoryToken });
   return r.data.accounts;
 }
 
-// Get all transactions from start-of-year through today, paginated.
-// SNAPSHOT_YEAR env var lets you backfill an earlier year. If set and the
-// year is in the past, the range is the full calendar year.
 async function getYTDTransactions() {
-  const tok = getToken();
-  if (!tok) return [];
-  const today = new Date();
-  const targetYear = Number(process.env.SNAPSHOT_YEAR) || today.getFullYear();
-  const start = `${targetYear}-01-01`;
-  const end = targetYear < today.getFullYear()
-    ? `${targetYear}-12-31`
-    : today.toISOString().slice(0, 10);
+  await _loadToken();
+  if (!memoryToken) return [];
+  const year = new Date().getFullYear();
+  const start = `${year}-01-01`;
+  const end = new Date().toISOString().slice(0, 10);
   let offset = 0;
   const all = [];
   while (true) {
     const r = await client.transactionsGet({
-      access_token: tok,
+      access_token: memoryToken,
       start_date: start,
       end_date: end,
       options: { count: 500, offset },
@@ -100,4 +95,4 @@ async function getYTDTransactions() {
   return all;
 }
 
-module.exports = { getToken, setToken, createLinkToken, exchange, getAccounts, getYTDTransactions };
+module.exports = { getToken, ensureTokenLoaded, setToken, createLinkToken, exchange, getAccounts, getYTDTransactions };

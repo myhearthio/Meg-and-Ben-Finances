@@ -1,16 +1,12 @@
 // Connor — family CFO. Tool-calling loop with Claude Sonnet 4.5.
-// Hard rule: Connor never emits a number he didn't just retrieve via a tool call.
-const fs = require("fs");
-const path = require("path");
+// All persistent state (history, CONNOR.md, memory) lives in Postgres via data.js.
+const db = require("./data");
 const tools = require("./tools");
 
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_KEY;
 const MODEL = "claude-sonnet-4-5";
 const MAX_ITERATIONS = 8;
-const DATA_ROOT = process.env.DATA_DIR || path.join(__dirname, "secrets");
-const MEMORY_PATH = path.join(DATA_ROOT, "connor-memory.json");
-const CONNOR_MD_PATH = path.join(DATA_ROOT, "CONNOR.md");
-const HISTORY_PATH = path.join(DATA_ROOT, "connor-history.json");
+const CONNOR_MD_KEY = "CONNOR.md";
 
 const CONNOR_MD_SEED = `# CONNOR.md
 
@@ -32,28 +28,31 @@ explicit "remember this" instructions. Newest at the top within each section.
 (empty)
 `;
 
-function ensureConnorMd() {
-  try { fs.mkdirSync(DATA_ROOT, { recursive: true }); } catch (e) {}
-  if (!fs.existsSync(CONNOR_MD_PATH)) {
-    try { fs.writeFileSync(CONNOR_MD_PATH, CONNOR_MD_SEED); } catch (e) {}
+// In-memory cache for sync access; refreshed on every write.
+let cachedMd = null;
+async function readConnorMd() {
+  if (cachedMd != null) return cachedMd;
+  const body = await db.memoGet(CONNOR_MD_KEY, "");
+  if (!body) {
+    await db.memoSet(CONNOR_MD_KEY, CONNOR_MD_SEED);
+    cachedMd = CONNOR_MD_SEED;
+  } else {
+    cachedMd = body;
   }
+  return cachedMd;
 }
-function readConnorMd() {
-  ensureConnorMd();
-  try { return fs.readFileSync(CONNOR_MD_PATH, "utf8"); } catch { return CONNOR_MD_SEED; }
+async function writeConnorMd(content) {
+  cachedMd = content;
+  await db.memoSet(CONNOR_MD_KEY, content);
 }
-function writeConnorMd(content) {
-  ensureConnorMd();
-  fs.writeFileSync(CONNOR_MD_PATH, content);
-}
-function appendToConnorMd(section, entry) {
-  const md = readConnorMd();
+async function appendToConnorMd(section, entry) {
+  const md = await readConnorMd();
   const today = new Date().toISOString().slice(0, 10);
   const line = `- (${today}) ${entry}`;
   const re = new RegExp(`(## ${section}\\s*\\n)`, "i");
   if (!re.test(md)) {
     const next = md.trimEnd() + `\n\n## ${section}\n${line}\n`;
-    writeConnorMd(next);
+    await writeConnorMd(next);
     return next;
   }
   const sectionStart = md.search(re);
@@ -65,27 +64,26 @@ function appendToConnorMd(section, entry) {
   const cleanedBody = sectionBody.replace(/^\(empty[^\n]*\)\s*\n?/m, "");
   const newBody = line + "\n" + cleanedBody;
   const next = md.slice(0, afterHeader) + newBody + tail;
-  writeConnorMd(next);
+  await writeConnorMd(next);
   return next;
 }
 
-function readHistory() {
-  try { return JSON.parse(fs.readFileSync(HISTORY_PATH, "utf8")); } catch { return []; }
+async function readHistory() {
+  try { return await db.chatRecent(40); } catch { return []; }
 }
-function writeHistory(msgs) {
-  try { fs.mkdirSync(DATA_ROOT, { recursive: true }); } catch (e) {}
-  const trimmed = msgs.slice(-40);
-  fs.writeFileSync(HISTORY_PATH, JSON.stringify(trimmed, null, 2));
+async function writeHistory(msgs) {
+  const trimmed = (msgs || []).slice(-40);
+  await db.chatReplace(trimmed);
 }
-function readMemory() {
-  try { return JSON.parse(fs.readFileSync(MEMORY_PATH, "utf8")); } catch { return { facts: [], preferences: [], history: [] }; }
+async function readMemory() {
+  return (await db.kvGet("connor_memory", null)) || { facts: [], preferences: [], history: [] };
 }
 
-function buildSystemPrompt(snapshot) {
+async function buildSystemPrompt(snapshot) {
   const today = new Date().toISOString().slice(0, 10);
   const k = snapshot.kpis || {};
-  const mem = readMemory();
-  const connorMd = readConnorMd();
+  const mem = await readMemory();
+  const connorMd = await readConnorMd();
 
   return `You are Connor, the Lalez family CFO. You report to Ben and Meg.
 
@@ -118,12 +116,12 @@ Income YTD: $${(k.income_ytd || 0).toLocaleString()}  ·  Expenses YTD: $${(k.ex
 Net Saved YTD: $${(k.net_saved_ytd || 0).toLocaleString()}  ·  Savings Rate: ${k.savings_rate_pct || 0}%
 
 == TOOLS ==
-- get_top_expenses(month?, date_from?, date_to?, limit?, group_by?) — ranked vendors/txs with exclusions applied. USE FOR ANY RANKING.
-- get_vendor_total(vendor) — YTD total for one vendor.
-- get_category_breakdown(category, by_month?) — actual vs forecast for a family category.
-- get_forecast_vs_actual() — all categories at once.
-- find_transactions(query?, amount?, date_from?, date_to?, mask?) — raw search, NO exclusions, never rank from this.
-- navigate(label, tab, scroll_to?) — produces a click-chip for the user.
+- get_top_expenses(month?, date_from?, date_to?, limit?, group_by?)
+- get_vendor_total(vendor)
+- get_category_breakdown(category, by_month?)
+- get_forecast_vs_actual()
+- find_transactions(query?, amount?, date_from?, date_to?, mask?)
+- navigate(label, tab, scroll_to?)
 - save_memory / read_memory.
 - write_to_connor_md — only when the user explicitly says so.
 
@@ -135,7 +133,7 @@ ${mem.preferences.length ? "\nPreferences:\n" + mem.preferences.map(p => "- " + 
 ${connorMd}
 
 == WRITING TO CONNOR.md ==
-Only when Ben or Meg explicitly says "write to connor.md" / "remember this" do you call write_to_connor_md. Never on your own initiative. Sections: Facts, Preferences, Decisions, Corrections. One factual line, no markdown.`;
+Only when Ben or Meg explicitly says "write to connor.md" / "remember this" do you call write_to_connor_md. Never on your own initiative.`;
 }
 
 async function anthropicCall(body) {
@@ -154,7 +152,7 @@ async function anthropicCall(body) {
 }
 
 async function chat(userMessages, snapshot) {
-  const system = buildSystemPrompt(snapshot);
+  const system = await buildSystemPrompt(snapshot);
   const toolDefs = tools.getToolDefinitions();
   const toolCalls = [];
 
@@ -164,24 +162,16 @@ async function chat(userMessages, snapshot) {
 
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
     const resp = await anthropicCall({
-      model: MODEL,
-      max_tokens: 2048,
-      system,
-      tools: toolDefs,
-      messages,
+      model: MODEL, max_tokens: 2048, system, tools: toolDefs, messages,
     });
-
     const content = resp.content || [];
     const textBlocks = content.filter(b => b.type === "text");
     const toolUses = content.filter(b => b.type === "tool_use");
-
     messages.push({ role: "assistant", content });
-
     if (toolUses.length === 0) {
       finalText = textBlocks.map(b => b.text).join("\n").trim();
       break;
     }
-
     const toolResults = [];
     for (const tu of toolUses) {
       let result;
@@ -189,16 +179,11 @@ async function chat(userMessages, snapshot) {
       catch (e) { result = { error: e.message }; }
       toolCalls.push({ name: tu.name, input: tu.input, result });
       if (result && result.__action) actions.push(result.__action);
-      toolResults.push({
-        type: "tool_result",
-        tool_use_id: tu.id,
-        content: JSON.stringify(result).slice(0, 100000),
-      });
+      toolResults.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(result).slice(0, 100000) });
     }
     messages.push({ role: "user", content: toolResults });
     if (resp.stop_reason === "end_turn") break;
   }
-
   return { text: finalText || "(no response)", actions, toolCalls };
 }
 

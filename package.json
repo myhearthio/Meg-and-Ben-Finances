@@ -9,7 +9,8 @@
   "dependencies": {
     "express": "^4.19.2",
     "cors": "^2.8.5",
-    "plaid": "^42.2.0"
+    "plaid": "^42.2.0",
+    "pg": "^8.13.1"
   },
   "engines": {
     "node": ">=18"

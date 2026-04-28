@@ -1,27 +1,27 @@
-// csv.js — parse uploaded Chase CSVs and normalize to a common tx shape.
-// Lifted from reference/chase-csv.js, mask whitelist removed, kind tracking added.
+// csv.js — parse uploaded Chase CSVs. CSVs persisted in Postgres via data.js.
 //
 // Format A (Chase checking):  Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #
 // Format B (Chase CC):         Transaction Date,Post Date,Description,Category,Type,Amount,Memo
-//
-// Output: [{ date: "YYYY-MM-DD", amount: number (Plaid sign convention: + = debit, − = credit), name, mask, source: "csv" }]
-const fs = require("fs");
-const path = require("path");
+const db = require("./data");
 
-const DATA_ROOT = process.env.DATA_DIR || path.join(__dirname, "secrets");
-const DIR = path.join(DATA_ROOT, "csv");
-const KIND_FILE = path.join(DIR, "_kinds.json");
+// In-memory cache populated at boot from Postgres so the synchronous
+// stitch path in server.js stays fast and side-effect-free.
+const cache = new Map(); // mask -> { csv, kind }
+let primed = false;
 
-function _ensureDir() {
-  try { fs.mkdirSync(DIR, { recursive: true }); } catch (e) {}
-}
-
-function _readKinds() {
-  try { return JSON.parse(fs.readFileSync(KIND_FILE, "utf8")); } catch (e) { return {}; }
-}
-function _writeKinds(o) {
-  _ensureDir();
-  fs.writeFileSync(KIND_FILE, JSON.stringify(o, null, 2));
+async function prime() {
+  if (primed) return;
+  try {
+    const rows = await db.csvList();
+    for (const { mask, kind } of rows) {
+      const r = await db.csvGet(mask);
+      if (r) cache.set(mask, { csv: r.csv, kind: r.kind || kind || null });
+    }
+    primed = true;
+    console.log(`[csv] primed ${cache.size} CSV file(s) from Postgres`);
+  } catch (e) {
+    console.log("[csv] prime err:", e.message);
+  }
 }
 
 function parseLine(line) {
@@ -45,7 +45,6 @@ function toISODate(s) {
   return `${yy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
 }
 
-// Returns { transactions: [...], format: "checking" | "cc", error? }
 function parseChaseCsv(csvText, mask) {
   const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
   if (lines.length < 2) return { transactions: [], format: null, error: "empty csv" };
@@ -71,7 +70,6 @@ function parseChaseCsv(csvText, mask) {
       const date = toISODate(p[chkPosting]);
       const amt = parseFloat(p[chkAmount]);
       if (!date || isNaN(amt)) continue;
-      // Chase checking CSV: +deposit, -debit. Plaid: -credit, +debit. Invert.
       out.push({ date, amount: -amt, name: (p[chkDesc] || "").trim(), mask, source: "csv" });
     }
     return { transactions: out, format: "checking" };
@@ -81,7 +79,6 @@ function parseChaseCsv(csvText, mask) {
       const date = toISODate(p[ccPostDate >= 0 ? ccPostDate : ccTxDate]);
       const amt = parseFloat(p[ccAmount]);
       if (!date || isNaN(amt)) continue;
-      // Chase CC CSV: charges are NEGATIVE, refunds POSITIVE. Plaid: +debit, -credit. Invert.
       out.push({ date, amount: -amt, name: (p[ccDesc] || "").trim(), mask, source: "csv" });
     }
     return { transactions: out, format: "cc" };
@@ -90,38 +87,29 @@ function parseChaseCsv(csvText, mask) {
   return { transactions: [], format: null, error: "unknown csv format — headers: " + header.join(",") };
 }
 
-function saveCsv(mask, csvText, kind) {
-  _ensureDir();
-  fs.writeFileSync(path.join(DIR, `${mask}.csv`), csvText);
-  if (kind) {
-    const k = _readKinds();
-    k[mask] = kind;
-    _writeKinds(k);
-  }
+async function saveCsv(mask, csvText, kind) {
+  await db.csvSave(mask, csvText, kind || null);
+  cache.set(mask, { csv: csvText, kind: kind || cache.get(mask)?.kind || null });
 }
 
 function getKind(mask) {
-  return _readKinds()[mask] || null;
+  return cache.get(mask)?.kind || null;
 }
 
 function loadCsvTx(mask) {
-  const p = path.join(DIR, `${mask}.csv`);
-  if (!fs.existsSync(p)) return { transactions: [], format: null };
-  return parseChaseCsv(fs.readFileSync(p, "utf8"), mask);
+  const row = cache.get(mask);
+  if (!row || !row.csv) return { transactions: [], format: null };
+  return parseChaseCsv(row.csv, mask);
 }
 
 function hasCsv(mask) {
-  return fs.existsSync(path.join(DIR, `${mask}.csv`));
+  return cache.has(mask) && !!cache.get(mask)?.csv;
 }
 
 function listMasks() {
-  if (!fs.existsSync(DIR)) return [];
-  return fs.readdirSync(DIR)
-    .filter(f => /^\d{4}\.csv$/.test(f))
-    .map(f => f.replace(/\.csv$/, ""));
+  return Array.from(cache.keys()).sort();
 }
 
-// Stitch CSV + Plaid: CSV covers historical, Plaid covers tail.
 function stitch(csvTx, plaidTx) {
   if (!csvTx.length) return plaidTx;
   const csvMaxDate = csvTx.reduce((m, t) => (!m || t.date > m) ? t.date : m, null);
@@ -132,4 +120,4 @@ function stitch(csvTx, plaidTx) {
   return merged;
 }
 
-module.exports = { parseChaseCsv, saveCsv, loadCsvTx, hasCsv, listMasks, getKind, stitch, DIR };
+module.exports = { prime, parseChaseCsv, saveCsv, loadCsvTx, hasCsv, listMasks, getKind, stitch };

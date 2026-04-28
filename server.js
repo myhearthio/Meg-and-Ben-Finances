@@ -1,26 +1,28 @@
 // Meg & Ben Finance — Express backend.
+// All persistent state in Postgres via data.js. NEVER write to local disk.
+//
 // Endpoints:
 //   GET  /api/snapshot           — cached 60s, full dashboard state
-//   POST /api/chat               — Connor proxy (Claude tool-calling)
+//   POST /api/chat               — Connor proxy
 //   POST /api/plaid/link         — create link token
 //   POST /api/plaid/exchange     — exchange public token
 //   GET  /api/plaid/status       — { connected: bool }
 //   POST /api/upload/csv?mask=&kind=  — Chase CSV upload
 //   GET  /api/upload/status
 //   GET/POST /api/forecast       — annual forecast amounts per category
-//   GET/POST /api/actuals        — vendor + per-tx category overrides + approval state
-//   GET  /api/version            — running commit SHA (for deploy verification)
-//   GET  /api/connor/md          — Connor's CONNOR.md memory file
-//   GET  /api/connor/history     — last 40 chat messages
+//   GET/POST /api/actuals        — vendor + per-tx category overrides
+//   GET  /api/version            — running commit SHA
+//   GET  /api/connor/md
+//   GET  /api/connor/history
 //   POST /api/connor/history/clear
-//   GET  /api/debug/find         — find tx by query/amount/mask
-//   GET  /oauth-return           — Plaid OAuth return page
+//   GET  /api/debug/find
+//   GET  /oauth-return
 
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
-const fs = require("fs");
 
+const db = require("./data");
 const plaid = require("./plaid");
 const csv = require("./csv");
 const { buildSnapshot } = require("./snapshot");
@@ -34,34 +36,30 @@ app.use(express.json({ limit: "10mb" }));
 const frontendDir = path.join(__dirname, "frontend");
 app.use("/", express.static(frontendDir));
 
-const DATA_ROOT = process.env.DATA_DIR || path.join(__dirname, "secrets");
-
 // ---- snapshot cache (60s, invalidated on every write) ----
 let cache = { data: null, ts: 0, inflight: null };
 const CACHE_MS = 60_000;
 
-// ---- override + forecast file plumbing ----
-function _ensureSecrets() { try { fs.mkdirSync(DATA_ROOT, { recursive: true }); } catch (e) {} }
-function _overridesPath() { _ensureSecrets(); return path.join(DATA_ROOT, "family-overrides.json"); }
-function _forecastPath()  { _ensureSecrets(); return path.join(DATA_ROOT, "family-forecast.json"); }
-function _readOverrides() { try { return JSON.parse(fs.readFileSync(_overridesPath(), "utf8")); } catch (e) { return {}; } }
-function _writeOverrides(obj) { fs.writeFileSync(_overridesPath(), JSON.stringify(obj, null, 2)); }
-function _readForecast()  { try { return JSON.parse(fs.readFileSync(_forecastPath(), "utf8")); } catch (e) { return {}; } }
-function _writeForecast(obj) { fs.writeFileSync(_forecastPath(), JSON.stringify(obj, null, 2)); }
+// ---- override + forecast plumbing (Postgres-backed) ----
+const OVERRIDES_KEY = "family-overrides";
+const FORECAST_KEY = "family-forecast";
 
-// Single-promise queue serializes override writes (race-condition fix from reference).
+async function _readOverrides() { return (await db.kvGet(OVERRIDES_KEY, {})) || {}; }
+async function _writeOverrides(obj) { await db.kvSet(OVERRIDES_KEY, obj); }
+async function _readForecast()  { return (await db.kvGet(FORECAST_KEY, {})) || {}; }
+async function _writeForecast(obj) { await db.kvSet(FORECAST_KEY, obj); }
+
+// Single-promise queue serializes override writes against concurrent requests.
 let _writeQueue = Promise.resolve();
 function _queueOverrideUpdate(mutator) {
-  _writeQueue = _writeQueue.then(() => {
-    const obj = _readOverrides();
-    mutator(obj);
-    _writeOverrides(obj);
-  }).catch(e => { console.log("override queue err:", e); });
+  _writeQueue = _writeQueue.then(async () => {
+    const obj = await _readOverrides();
+    await mutator(obj);
+    await _writeOverrides(obj);
+  }).catch(e => { console.log("override queue err:", e.message); });
   return _writeQueue;
 }
 
-// Vendor normalization — institution-agnostic. Strips ORIG CO NAME, ZELLE prefix,
-// trailing random digits, *suffixes, phone numbers, state codes, etc.
 function normalizeVendor(raw) {
   if (!raw) return "UNKNOWN";
   let s = String(raw).toUpperCase().trim();
@@ -87,13 +85,11 @@ function normalizeVendor(raw) {
   return s || "UNKNOWN";
 }
 
-// ---- snapshot builder ----
 async function gatherSnapshot() {
   let accounts = [], plaidTx = [];
   try { accounts = await plaid.getAccounts(); } catch (e) { console.log("plaid accounts err:", e.message); }
   try { plaidTx = await plaid.getYTDTransactions(); } catch (e) { console.log("plaid tx err:", e.message); }
 
-  // Attach mask / type / subtype from Plaid accounts onto each Plaid tx
   const acctById = {};
   for (const a of accounts) acctById[a.account_id] = a;
   for (const t of plaidTx) {
@@ -105,7 +101,6 @@ async function gatherSnapshot() {
     }
   }
 
-  // Stitch CSV uploads. CSV covers historical, Plaid covers tail.
   const finalTx = [...plaidTx];
   const accountsWithCsv = [...accounts];
   const masks = csv.listMasks();
@@ -117,31 +112,24 @@ async function gatherSnapshot() {
     const acctId = realAcct ? realAcct.account_id : `csv-${mask}`;
     const kind = csv.getKind(mask) || (realAcct ? realAcct.type : "depository");
     for (const t of csvRes.transactions) {
-      if (plaidMinDate && t.date >= plaidMinDate) continue; // Plaid covers this date — skip CSV row
+      if (plaidMinDate && t.date >= plaidMinDate) continue;
       finalTx.push({
         account_id: acctId,
-        amount: t.amount,
-        name: t.name,
-        date: t.date,
-        account_mask: mask,
-        account_type: kind,
-        source: "csv",
+        amount: t.amount, name: t.name, date: t.date,
+        account_mask: mask, account_type: kind, source: "csv",
       });
     }
     if (!realAcct) {
       accountsWithCsv.push({
-        account_id: `csv-${mask}`,
-        mask,
+        account_id: `csv-${mask}`, mask,
         name: `Account ${mask} (CSV)`,
-        type: kind,
-        subtype: kind === "credit" ? "credit card" : "checking",
+        type: kind, subtype: kind === "credit" ? "credit card" : "checking",
         balances: { current: 0 },
       });
     }
   }
 
-  // Compute excluded tx ids (mirror snapshot.js's mkTxId format)
-  const overrides = _readOverrides();
+  const overrides = await _readOverrides();
   const excludedTxIds = new Set();
   {
     const txOv = overrides.__tx || {};
@@ -173,28 +161,21 @@ async function getSnapshot(force = false) {
   cache.inflight = (async () => {
     try {
       const snap = await gatherSnapshot();
-      cache.data = snap;
-      cache.ts = Date.now();
+      cache.data = snap; cache.ts = Date.now();
       return snap;
-    } finally {
-      cache.inflight = null;
-    }
+    } finally { cache.inflight = null; }
   })();
   return cache.inflight;
 }
 
 // ---- endpoints ----
-
 app.get("/api/snapshot", async (req, res) => {
   try {
     const force = req.query.force === "1";
     const snap = await getSnapshot(force);
     const { _plaidTx, ...safe } = snap;
     res.json(safe);
-  } catch (e) {
-    console.log("snapshot err:", e);
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { console.log("snapshot err:", e); res.status(500).json({ error: e.message }); }
 });
 
 app.post("/api/chat", async (req, res) => {
@@ -204,28 +185,24 @@ app.post("/api/chat", async (req, res) => {
     const result = await chat(incoming, snap);
     const assistantMsg = { role: "assistant", content: result.text, actions: result.actions || [], ts: Date.now() };
     const fullHistory = [...incoming.map(m => ({ role: m.role, content: m.content })), assistantMsg];
-    try { writeHistory(fullHistory); } catch (e) { console.log("history write err:", e.message); }
+    try { await writeHistory(fullHistory); } catch (e) { console.log("history write err:", e.message); }
     res.json({
-      text: result.text,
-      actions: result.actions || [],
+      text: result.text, actions: result.actions || [],
       tool_calls: (result.toolCalls || []).map(tc => ({ name: tc.name, input: tc.input })),
     });
-  } catch (e) {
-    console.log("chat err:", e);
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { console.log("chat err:", e); res.status(500).json({ error: e.message }); }
 });
 
-app.get("/api/connor/md", (req, res) => {
-  try { res.type("text/plain").send(readConnorMd()); }
+app.get("/api/connor/md", async (req, res) => {
+  try { res.type("text/plain").send(await readConnorMd()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.get("/api/connor/history", (req, res) => {
-  try { res.json({ messages: readHistory() }); }
+app.get("/api/connor/history", async (req, res) => {
+  try { res.json({ messages: await readHistory() }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post("/api/connor/history/clear", (req, res) => {
-  try { writeHistory([]); res.json({ ok: true }); }
+app.post("/api/connor/history/clear", async (req, res) => {
+  try { await writeHistory([]); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -247,11 +224,11 @@ app.post("/api/plaid/exchange", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get("/api/plaid/status", (req, res) => {
+app.get("/api/plaid/status", async (req, res) => {
+  await plaid.ensureTokenLoaded();
   res.json({ connected: !!plaid.getToken() });
 });
 
-// CSV upload (any 4-digit mask, kind = depository|credit)
 app.post("/api/upload/csv", express.text({ type: "*/*", limit: "25mb" }), async (req, res) => {
   try {
     const mask = String(req.query.mask || "").trim();
@@ -264,7 +241,7 @@ app.post("/api/upload/csv", express.text({ type: "*/*", limit: "25mb" }), async 
     }
     const parsed = csv.parseChaseCsv(csvText, mask);
     if (!parsed.format) return res.status(400).json({ error: parsed.error || "unrecognized CSV format" });
-    csv.saveCsv(mask, csvText, kind);
+    await csv.saveCsv(mask, csvText, kind);
     cache = { data: null, ts: 0, inflight: null };
     res.json({
       ok: true, mask, kind, format: parsed.format, count: parsed.transactions.length,
@@ -273,10 +250,7 @@ app.post("/api/upload/csv", express.text({ type: "*/*", limit: "25mb" }), async 
         max: parsed.transactions.reduce((m, t) => !m || t.date > m ? t.date : m, null),
       },
     });
-  } catch (e) {
-    console.log("csv upload err:", e);
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { console.log("csv upload err:", e); res.status(500).json({ error: e.message }); }
 });
 
 app.get("/api/upload/status", (req, res) => {
@@ -284,9 +258,7 @@ app.get("/api/upload/status", (req, res) => {
   for (const m of csv.listMasks()) {
     const r = csv.loadCsvTx(m);
     out[m] = {
-      has_csv: csv.hasCsv(m),
-      kind: csv.getKind(m),
-      format: r.format,
+      has_csv: csv.hasCsv(m), kind: csv.getKind(m), format: r.format,
       count: r.transactions.length,
       max_date: r.transactions.reduce((mx, t) => !mx || t.date > mx ? t.date : mx, null),
     };
@@ -294,102 +266,66 @@ app.get("/api/upload/status", (req, res) => {
   res.json(out);
 });
 
-// ---- Forecast (manual annual amounts per category) ----
-app.get("/api/forecast", (req, res) => res.json(_readForecast()));
-app.post("/api/forecast", (req, res) => {
+app.get("/api/forecast", async (req, res) => res.json(await _readForecast()));
+app.post("/api/forecast", async (req, res) => {
   try {
     const { category, amount } = req.body || {};
     if (!category) return res.status(400).json({ error: "category required" });
     const n = Number(amount);
     if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: "amount must be a non-negative number" });
-    const cur = _readForecast();
+    const cur = await _readForecast();
     cur[category] = Math.round(n);
-    _writeForecast(cur);
+    await _writeForecast(cur);
     cache.data = null; cache.ts = 0;
     res.json({ ok: true, forecast: cur });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ---- Actuals (vendor-level + per-tx categorized expenses; approval queue source) ----
 async function _buildActuals() {
   const snap = await getSnapshot(false);
   const tx = snap._plaidTx || [];
-  const overrides = _readOverrides();
+  const overrides = await _readOverrides();
   const txOv = overrides.__tx || {};
   const nameOv = overrides.__names || {};
   const txDescOv = overrides.__tx_desc || {};
 
   const yr = String(Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());
-  // CHECK has no payee — render per-tx (no rollup).
   const unrolledPrefixes = [/^CHECK\b/i];
-
   const txList = [];
   let txIdx = 0;
   for (const t of tx) {
     if (!t.date || !t.date.startsWith(yr)) continue;
-    // Only include EXPENSES (depository debits + CC charges). Skip income, CC payments, refunds.
     let kind = (t.account_type || "").toLowerCase();
     if (!kind && t.account_mask) kind = csv.getKind(t.account_mask) || "";
     if (!kind) continue;
     const isExpense = (kind === "depository" && t.amount > 0) || (kind === "credit" && t.amount > 0);
     if (!isExpense) continue;
-
     const rawDesc = String(t.name || "").trim();
     const isUnrolled = unrolledPrefixes.some(re => re.test(rawDesc));
     const normName = normalizeVendor(rawDesc);
     const vendorKey = isUnrolled ? (normName + "#" + txIdx) : normName;
     const txId = (t.date || "") + "|" + Number(t.amount) + "|" + rawDesc.slice(0, 60);
-
-    txList.push({
-      id: txId,
-      date: (t.date || "").slice(0, 10),
-      desc: rawDesc,
-      amount: Number(t.amount),
-      vendorKey, vendorNorm: normName,
-      mask: t.account_mask || "",
-    });
+    txList.push({ id: txId, date: (t.date || "").slice(0, 10), desc: rawDesc, amount: Number(t.amount), vendorKey, vendorNorm: normName, mask: t.account_mask || "" });
     txIdx++;
   }
-
   const byVendor = {};
   for (const t of txList) {
     const txCat = txOv[t.id] || null;
     const vOverride = overrides[t.vendorKey] || null;
     const cat = txCat || vOverride || "other";
     let v = byVendor[t.vendorKey];
-    if (!v) {
-      v = byVendor[t.vendorKey] = {
-        key: t.vendorKey,
-        name: nameOv[t.vendorKey] || t.vendorNorm,
-        rawSample: t.desc,
-        amount: 0, count: 0,
-        cat: vOverride || "other",
-        vendorSaved: !!vOverride,
-        txs: [],
-      };
-    }
+    if (!v) v = byVendor[t.vendorKey] = { key: t.vendorKey, name: nameOv[t.vendorKey] || t.vendorNorm, rawSample: t.desc, amount: 0, count: 0, cat: vOverride || "other", vendorSaved: !!vOverride, txs: [] };
     v.amount += t.amount;
     v.count += 1;
     const userSet = !!(txCat || vOverride);
     const suggestion = vOverride || "";
-    v.txs.push({
-      id: t.id, date: t.date, desc: txDescOv[t.id] || t.desc,
-      amount: t.amount, cat, userSet, suggestion,
-    });
+    v.txs.push({ id: t.id, date: t.date, desc: txDescOv[t.id] || t.desc, amount: t.amount, cat, userSet, suggestion });
   }
-
   const vendors = Object.values(byVendor).sort((a, b) => b.amount - a.amount);
   vendors.forEach(v => v.txs.sort((a, b) => (b.date || "").localeCompare(a.date || "")));
-
   const byCategory = {};
   let total = 0;
-  for (const v of vendors) {
-    for (const tx of v.txs) {
-      byCategory[tx.cat] = (byCategory[tx.cat] || 0) + tx.amount;
-      total += tx.amount;
-    }
-  }
-
+  for (const v of vendors) for (const tx of v.txs) { byCategory[tx.cat] = (byCategory[tx.cat] || 0) + tx.amount; total += tx.amount; }
   return { vendors, byCategory, total };
 }
 
@@ -402,7 +338,7 @@ app.post("/api/actuals", async (req, res) => {
   try {
     const body = req.body || {};
     let handled = true;
-    await _queueOverrideUpdate(obj => {
+    await _queueOverrideUpdate(async (obj) => {
       if (body.tx_id && body.desc !== undefined) {
         obj.__tx_desc = obj.__tx_desc || {};
         if (body.desc) obj.__tx_desc[body.tx_id] = body.desc;
@@ -417,11 +353,8 @@ app.post("/api/actuals", async (req, res) => {
       } else if (body.vendor_key && body.category) {
         obj[body.vendor_key] = body.category;
       } else if (body.vendor && body.category) {
-        // backwards compat
         obj[body.vendor] = body.category;
-      } else {
-        handled = false;
-      }
+      } else { handled = false; }
     });
     if (!handled) return res.status(400).json({ error: "bad payload" });
     cache.data = null; cache.ts = 0;
@@ -429,7 +362,6 @@ app.post("/api/actuals", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ---- diagnostics ----
 app.get("/api/version", (req, res) => {
   res.json({
     commit: process.env.RENDER_GIT_COMMIT || "local",
@@ -465,7 +397,16 @@ app.get("/oauth-return", (req, res) => {
 
 // ---- boot ----
 const PORT = process.env.PORT || 8787;
-app.listen(PORT, () => {
-  console.log(`Meg & Ben Finance backend on http://localhost:${PORT}`);
-  getSnapshot(true).then(() => console.log("Snapshot ready.")).catch(e => console.log("Boot snapshot err:", e.message));
-});
+(async () => {
+  try { await db.init(); }
+  catch (e) { console.log("[boot] db init failed:", e.message); }
+  try { await csv.prime(); }
+  catch (e) { console.log("[boot] csv prime failed:", e.message); }
+  try { await plaid.ensureTokenLoaded(); }
+  catch (e) { console.log("[boot] plaid token load failed:", e.message); }
+
+  app.listen(PORT, () => {
+    console.log(`Meg & Ben Finance backend on http://localhost:${PORT}`);
+    getSnapshot(true).then(() => console.log("Snapshot ready.")).catch(e => console.log("Boot snapshot err:", e.message));
+  });
+})();

@@ -186,6 +186,7 @@ function TopBar({ refreshedAt, onRefresh, plaidStatus, tab, onTabChange, year, o
     { key: "dashboard", label: "Dashboard" },
     { key: "budget", label: "Budget & Expenses" },
     { key: "income", label: "Income" },
+    { key: "investments", label: "Investments" },
     { key: "accounts", label: "Accounts" },
     { key: "settings", label: "Settings" },
   ];
@@ -329,6 +330,7 @@ function PlaidConnectButton({ hasItems, onChanged }) {
 function Main({ snap, tab }) {
   if (tab === "budget") return <BudgetView snap={snap} />;
   if (tab === "income") return <IncomeView snap={snap} />;
+  if (tab === "investments") return <InvestmentsView />;
   if (tab === "accounts") return <AccountsView snap={snap} />;
   if (tab === "settings") return <SettingsView />;
   return <Dashboard snap={snap} />;
@@ -1358,6 +1360,190 @@ function IncomeApprovalRow({ tx, cat, onCatChange, onApprove, onRenameVendor, on
       <button className={"approval-row-btn" + ((!cat || busy) ? " disabled" : "")} disabled={!cat || busy} onClick={go}>
         {busy ? "…" : "Approve"}
       </button>
+    </div>
+  );
+}
+
+// ---- Investments ----
+// One row per investment source. Drag a PDF onto a row to update its value.
+// "Manual" rows are typed numbers (real estate, etc).
+function InvestmentsView() {
+  const [list, setList] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+
+  const load = async () => {
+    try {
+      const r = await fetch("/api/investments");
+      const j = await r.json();
+      setList(j.investments || []);
+      setTotal(j.total || 0);
+    } catch {} finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  return (
+    <div>
+      <div className="page-title">Investments</div>
+      <div className="page-subtitle">Drag a Rockefeller statement PDF onto its row to refresh. Type a value for everything else.</div>
+
+      <div className="inv-total-card">
+        <div className="inv-total-label">Total invested</div>
+        <div className="inv-total-value">{fmt(total)}</div>
+      </div>
+
+      <div className="inv-list">
+        {loading ? (
+          <div className="inv-empty">Loading…</div>
+        ) : list.length === 0 ? (
+          <div className="inv-empty">No investments yet. Add your first one below.</div>
+        ) : list.map(row => (
+          <InvestmentRow key={row.id} row={row} onChange={load} total={total} />
+        ))}
+      </div>
+
+      {showAdd ? (
+        <AddInvestmentForm onCancel={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); load(); }} />
+      ) : (
+        <button className="inv-add-btn" onClick={() => setShowAdd(true)}>+ Add investment</button>
+      )}
+    </div>
+  );
+}
+
+function InvestmentRow({ row, onChange, total }) {
+  const [editing, setEditing] = useState(false);
+  const [draftName, setDraftName] = useState(row.name);
+  const [draftValue, setDraftValue] = useState(String(row.value || 0));
+  const [busy, setBusy] = useState(false);
+  const [drag, setDrag] = useState(false);
+  const [parseStatus, setParseStatus] = useState(null); // null | "uploading" | "ok" | { error }
+
+  const pct = total > 0 ? Math.round((row.value / total) * 100) : 0;
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await fetch("/api/investments", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: row.id, name: draftName, value: Number(draftValue) || 0, source: "manual" }),
+      });
+      setEditing(false);
+      onChange();
+    } finally { setBusy(false); }
+  };
+
+  const remove = async () => {
+    if (!confirm(`Delete "${row.name}"?`)) return;
+    await fetch(`/api/investments/${row.id}`, { method: "DELETE" });
+    onChange();
+  };
+
+  const uploadPdf = async (file) => {
+    if (!file) return;
+    setParseStatus("uploading");
+    try {
+      const r = await fetch(`/api/investments/parse-pdf?id=${encodeURIComponent(row.id)}&filename=${encodeURIComponent(file.name)}`, {
+        method: "POST",
+        headers: { "content-type": "application/pdf" },
+        body: file,
+      });
+      const j = await r.json();
+      if (!r.ok || j.error) {
+        setParseStatus({ error: j.error || "upload failed" });
+      } else {
+        setParseStatus("ok");
+        onChange();
+        setTimeout(() => setParseStatus(null), 3000);
+      }
+    } catch (e) {
+      setParseStatus({ error: e.message });
+    }
+  };
+
+  const onDrop = (e) => {
+    e.preventDefault(); setDrag(false);
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f && f.type === "application/pdf") uploadPdf(f);
+    else setParseStatus({ error: "drop a PDF file" });
+  };
+
+  return (
+    <div
+      className={"inv-row" + (drag ? " inv-row-drag" : "")}
+      onDragOver={e => { e.preventDefault(); setDrag(true); }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={onDrop}
+    >
+      <div className="inv-row-main">
+        {editing ? (
+          <>
+            <input className="inv-row-name-input" value={draftName} onChange={e => setDraftName(e.target.value)} />
+            <input className="inv-row-value-input" value={draftValue}
+                   onChange={e => setDraftValue(e.target.value.replace(/[^0-9.\-]/g, ""))}
+                   placeholder="0" />
+            <div className="inv-row-actions">
+              <button className="inv-btn-primary" onClick={save} disabled={busy}>Save</button>
+              <button className="inv-btn-secondary" onClick={() => setEditing(false)}>Cancel</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="inv-row-name">{row.name}</div>
+            <div className="inv-row-pct">{pct}%</div>
+            <div className="inv-row-value">{fmt(row.value)}</div>
+            <div className="inv-row-actions">
+              <label className="inv-btn-secondary">
+                Upload PDF
+                <input type="file" accept="application/pdf" style={{ display: "none" }}
+                       onChange={e => uploadPdf(e.target.files[0])} />
+              </label>
+              <button className="inv-btn-secondary" onClick={() => { setDraftName(row.name); setDraftValue(String(row.value)); setEditing(true); }}>Edit</button>
+              <button className="inv-btn-ghost" onClick={remove}>Delete</button>
+            </div>
+          </>
+        )}
+      </div>
+      <div className="inv-row-meta">
+        {row.updated_at && <span>Updated {new Date(row.updated_at).toLocaleDateString()}</span>}
+        {row.last_pdf_as_of && <span>· Statement as of {row.last_pdf_as_of}</span>}
+        {row.last_pdf_label && <span>· {row.last_pdf_label}</span>}
+        {row.source === "rockefeller" && <span>· From PDF</span>}
+        {row.source === "manual" && <span>· Manual entry</span>}
+      </div>
+      {parseStatus === "uploading" && <div className="inv-row-status">Reading PDF…</div>}
+      {parseStatus === "ok" && <div className="inv-row-status inv-row-status-ok">Updated.</div>}
+      {parseStatus && parseStatus.error && <div className="inv-row-status inv-row-status-err">{parseStatus.error}</div>}
+      {drag && <div className="inv-row-drop-hint">Drop the PDF</div>}
+    </div>
+  );
+}
+
+function AddInvestmentForm({ onCancel, onSaved }) {
+  const [name, setName] = useState("");
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    if (!name.trim()) return;
+    setBusy(true);
+    try {
+      await fetch("/api/investments", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), value: Number(value) || 0, source: "manual" }),
+      });
+      onSaved();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="inv-add-form">
+      <input placeholder="Name (e.g. Rockefeller, Wealthfront, Brooklyn duplex)" value={name} onChange={e => setName(e.target.value)} />
+      <input placeholder="Value (or leave blank, fill in later)" value={value}
+             onChange={e => setValue(e.target.value.replace(/[^0-9.\-]/g, ""))} />
+      <button className="inv-btn-primary" onClick={save} disabled={busy || !name.trim()}>Add</button>
+      <button className="inv-btn-secondary" onClick={onCancel}>Cancel</button>
     </div>
   );
 }

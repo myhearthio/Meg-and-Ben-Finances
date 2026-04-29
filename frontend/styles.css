@@ -580,3 +580,100 @@ body {
   font-family: "JetBrains Mono", monospace; font-size: 12px;
   overflow-x: auto;
 }
+
+/* Investments */
+.inv-total-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 28px 32px; margin-bottom: 20px;
+}
+.inv-total-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-subtle); font-weight: 600; margin-bottom: 8px;
+}
+.inv-total-value {
+  font-size: 40px; font-weight: 600; letter-spacing: -0.02em;
+  font-family: "JetBrains Mono", monospace; color: var(--text);
+}
+.inv-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.inv-empty {
+  background: var(--panel); border: 1px dashed var(--border);
+  border-radius: var(--radius); padding: 24px; text-align: center;
+  color: var(--text-muted); font-size: 13px;
+}
+.inv-row {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px 20px;
+  position: relative; transition: background 0.12s, border-color 0.12s;
+}
+.inv-row-drag {
+  background: var(--panel-2); border-color: var(--text);
+  border-style: dashed;
+}
+.inv-row-main {
+  display: grid;
+  grid-template-columns: 1fr 60px 160px auto;
+  gap: 16px; align-items: center;
+}
+.inv-row-name { font-weight: 600; font-size: 15px; letter-spacing: -0.005em; }
+.inv-row-pct { color: var(--text-muted); font-size: 12px; text-align: right; }
+.inv-row-value {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 18px; font-weight: 600; text-align: right;
+}
+.inv-row-actions { display: flex; gap: 6px; align-items: center; }
+.inv-row-name-input, .inv-row-value-input {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 8px 10px; font-size: 13px; font-family: inherit; background: var(--panel-2);
+}
+.inv-row-value-input { font-family: "JetBrains Mono", monospace; text-align: right; }
+.inv-row-meta {
+  margin-top: 8px;
+  font-size: 11px; color: var(--text-subtle);
+  display: flex; gap: 4px; flex-wrap: wrap;
+}
+.inv-row-status {
+  margin-top: 8px; font-size: 12px; color: var(--text-muted);
+  font-style: italic;
+}
+.inv-row-status-ok { color: var(--green); font-style: normal; }
+.inv-row-status-err { color: var(--red); font-style: normal; }
+.inv-row-drop-hint {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 14px; color: var(--text);
+  pointer-events: none;
+}
+.inv-btn-primary {
+  padding: 7px 14px; background: var(--text); color: white; border: none;
+  border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 500;
+  font-family: inherit;
+}
+.inv-btn-primary:hover { background: #333; }
+.inv-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.inv-btn-secondary {
+  padding: 7px 12px; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  cursor: pointer; font-size: 12px; font-weight: 500; font-family: inherit;
+  display: inline-flex; align-items: center;
+}
+.inv-btn-secondary:hover { background: var(--border); }
+.inv-btn-ghost {
+  padding: 7px 8px; background: transparent; color: var(--text-muted);
+  border: none; border-radius: var(--radius-sm);
+  cursor: pointer; font-size: 12px; font-family: inherit;
+}
+.inv-btn-ghost:hover { color: var(--red); }
+.inv-add-btn {
+  padding: 12px 16px; background: var(--panel); color: var(--text-muted);
+  border: 1px dashed var(--border); border-radius: var(--radius);
+  cursor: pointer; font-size: 13px; font-family: inherit; width: 100%;
+}
+.inv-add-btn:hover { background: var(--panel-2); color: var(--text); border-color: var(--border-strong); }
+.inv-add-form {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+  display: grid; grid-template-columns: 2fr 1fr auto auto; gap: 8px;
+}
+.inv-add-form input {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 8px 10px; font-size: 13px; font-family: inherit; background: var(--panel-2);
+}

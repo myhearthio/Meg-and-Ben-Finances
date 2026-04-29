@@ -752,6 +752,161 @@ app.post("/api/categories", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- Investments ----
+// Simple list of {id, name, value, source, note, updated_at, last_pdf_filename}.
+// "source" can be "rockefeller" (PDF-parsed), "manual" (typed value), or future
+// integrations. We store the entire blob under one kv key.
+const INVESTMENTS_KEY = "family-investments";
+async function _readInvestments() {
+  const list = await db.kvGet(INVESTMENTS_KEY, []);
+  return Array.isArray(list) ? list : [];
+}
+async function _writeInvestments(list) { await db.kvSet(INVESTMENTS_KEY, list); }
+
+function _newInvestmentId() {
+  return "inv_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
+}
+
+app.get("/api/investments", async (req, res) => {
+  try {
+    const list = await _readInvestments();
+    const total = list.reduce((s, x) => s + (Number(x.value) || 0), 0);
+    res.json({ investments: list, total });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Create or update one row.
+// Body: { id?, name, value?, source?, note? }. If id is missing, create.
+app.post("/api/investments", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const list = await _readInvestments();
+    let row;
+    if (body.id) {
+      row = list.find(x => x.id === body.id);
+      if (!row) return res.status(404).json({ error: "investment not found" });
+      if (body.name !== undefined) row.name = String(body.name);
+      if (body.value !== undefined) row.value = Number(body.value) || 0;
+      if (body.source !== undefined) row.source = String(body.source);
+      if (body.note !== undefined) row.note = String(body.note);
+      row.updated_at = new Date().toISOString();
+    } else {
+      row = {
+        id: _newInvestmentId(),
+        name: String(body.name || "Untitled"),
+        value: Number(body.value) || 0,
+        source: String(body.source || "manual"),
+        note: String(body.note || ""),
+        updated_at: new Date().toISOString(),
+      };
+      list.push(row);
+    }
+    await _writeInvestments(list);
+    res.json({ ok: true, investment: row });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete("/api/investments/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const list = await _readInvestments();
+    const next = list.filter(x => x.id !== id);
+    if (next.length === list.length) return res.status(404).json({ error: "not found" });
+    await _writeInvestments(next);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Parse a Rockefeller (or other brokerage) PDF and extract the total net worth.
+// We send the PDF to Claude as a document block and ask for one number.
+// Body: multipart/form-data with `pdf` file + form fields { id?, name? }.
+//   - If `id` is provided, update that investment row's value.
+//   - If `name` is provided (and no id), create a new row.
+app.post("/api/investments/parse-pdf", express.raw({ type: "application/pdf", limit: "20mb" }), async (req, res) => {
+  try {
+    const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_KEY;
+    if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+    const id = (req.query.id && String(req.query.id)) || null;
+    const name = (req.query.name && String(req.query.name)) || null;
+    const filename = (req.query.filename && String(req.query.filename)) || "statement.pdf";
+
+    const buf = req.body;
+    if (!buf || !buf.length) return res.status(400).json({ error: "no pdf body" });
+    const b64 = Buffer.from(buf).toString("base64");
+
+    // Ask Claude to extract the total. We accept a JSON object back so we can
+    // report a confidence and as_of date too.
+    const prompt = `You are reading a brokerage account statement. Find the SINGLE most-encompassing total dollar amount on this statement — the "Total Net Worth", "Total Account Value", "Total Portfolio Value", or equivalent grand total covering ALL accounts. This is the number the household should care about, not any individual sub-account.
+
+Respond with ONLY a JSON object, no prose, no markdown:
+{ "total": <number, no commas, no $>, "label": "<exact label as shown on statement>", "as_of": "<YYYY-MM-DD if a statement date is visible, else empty>", "confidence": "high"|"medium"|"low", "notes": "<one short sentence if ambiguous, else empty>" }`;
+
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-5",
+        max_tokens: 512,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } },
+            { type: "text", text: prompt },
+          ],
+        }],
+      }),
+    });
+    const j = await r.json();
+    if (j.error) return res.status(500).json({ error: j.error.message || "anthropic error" });
+    const text = (j.content || []).filter(c => c.type === "text").map(c => c.text).join("").trim();
+    let parsed;
+    try {
+      // Strip code fences if Claude added them.
+      const cleaned = text.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+      parsed = JSON.parse(cleaned);
+    } catch {
+      return res.status(500).json({ error: "couldn't parse model response", raw: text });
+    }
+    if (typeof parsed.total !== "number" || !isFinite(parsed.total)) {
+      return res.status(500).json({ error: "no total found", raw: parsed });
+    }
+
+    // Save to investment row.
+    const list = await _readInvestments();
+    let row;
+    if (id) {
+      row = list.find(x => x.id === id);
+      if (!row) return res.status(404).json({ error: "investment not found" });
+      row.value = parsed.total;
+      row.source = "rockefeller";
+      row.last_pdf_filename = filename;
+      row.last_pdf_label = parsed.label || "";
+      row.last_pdf_as_of = parsed.as_of || "";
+      row.last_pdf_confidence = parsed.confidence || "";
+      row.updated_at = new Date().toISOString();
+    } else {
+      row = {
+        id: _newInvestmentId(),
+        name: name || "Rockefeller",
+        value: parsed.total,
+        source: "rockefeller",
+        last_pdf_filename: filename,
+        last_pdf_label: parsed.label || "",
+        last_pdf_as_of: parsed.as_of || "",
+        last_pdf_confidence: parsed.confidence || "",
+        updated_at: new Date().toISOString(),
+      };
+      list.push(row);
+    }
+    await _writeInvestments(list);
+    res.json({ ok: true, investment: row, parsed });
+  } catch (e) { console.log("parse-pdf err:", e); res.status(500).json({ error: e.message }); }
+});
+
 app.get("/api/version", (req, res) => {
   res.json({
     commit: process.env.RENDER_GIT_COMMIT || "local",

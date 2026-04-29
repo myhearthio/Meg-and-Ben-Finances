@@ -1183,32 +1183,37 @@ function IncomeView({ snap }) {
             if (vendors.length === 0) return null;
             const catTotal = vendors.reduce((s, v) => s + v.amount, 0);
             return (
-              <div key={cat.key} className="accounts-section" style={{ marginTop: 18 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-                  <h3 style={{ margin: 0 }}>{cat.label}</h3>
-                  <div style={{ fontSize: 18, fontWeight: 600, color: cat.key === "excluded" ? "#888" : "#1a7f37" }}>{fmt(catTotal)}</div>
+              <div key={cat.key} className="income-section">
+                <div className="income-section-head">
+                  <span className="income-section-name">{cat.label}</span>
+                  <span className="income-section-count">{vendors.length} vendor{vendors.length===1?"":"s"}</span>
+                  <span className={"income-section-amount mono" + (cat.key === "excluded" ? " muted" : " positive")}>{fmt(catTotal)}</span>
                 </div>
-                <div className="pnl-vendor-list">
+                <div className="pnl-vendors">
                   {vendors.map(v => {
                     const exp = !!expandedVendors[v.key + ":" + cat.key];
                     const vTxs = (v.txs || []).filter(tx => tx.cat === cat.key);
                     return (
-                      <div key={v.key + ":" + cat.key} className="pnl-vendor-row">
-                        <div className="pnl-vendor-head" onClick={() => toggleVendor(v.key + ":" + cat.key)}>
-                          <span className="pnl-vendor-arrow">{exp ? "▾" : "▸"}</span>
+                      <div key={v.key + ":" + cat.key} className="pnl-vendor">
+                        <div className="pnl-vendor-row">
+                          {vTxs.length > 0 ? (
+                            <button className="pnl-vendor-caret-btn" onClick={() => toggleVendor(v.key + ":" + cat.key)} aria-label={exp ? "Collapse" : "Expand"}>{exp ? "▾" : "▸"}</button>
+                          ) : (
+                            <span className="pnl-vendor-caret">·</span>
+                          )}
                           <div className="pnl-vendor-mid">
                             <EditableText value={v.name} onSave={n => renameVendor(v.key, n)} className="pnl-vendor-name" />
                             <span className="pnl-vendor-meta">{vTxs.length} deposit{vTxs.length===1?"":"s"}</span>
                           </div>
                           <select
-                            className="pnl-tx-select"
+                            className="pnl-vendor-select"
                             value={cat.key}
                             onClick={e => e.stopPropagation()}
                             onChange={e => setVendorCat(v.key, e.target.value)}
                           >
                             {INCOME_CATS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
                           </select>
-                          <div className="pnl-vendor-amt">{fmt(v.amount)}</div>
+                          <div className="pnl-vendor-amount mono">{fmt(v.amount)}</div>
                         </div>
                         {exp && (
                           <div className="pnl-tx-list">
@@ -1219,7 +1224,7 @@ function IncomeView({ snap }) {
                                 <select className="pnl-tx-select" value={tx.cat} onChange={e => setTxCat(tx.id, e.target.value)}>
                                   {INCOME_CATS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
                                 </select>
-                                <div className="pnl-tx-amt">{fmt(tx.amount)}</div>
+                                <div className="pnl-tx-amount mono">{fmt(tx.amount)}</div>
                               </div>
                             ))}
                           </div>

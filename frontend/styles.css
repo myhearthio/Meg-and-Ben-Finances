@@ -535,6 +535,35 @@ body {
   font-size: 13px; max-width: 600px;
 }
 
+/* Income page */
+.income-section {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); margin-bottom: 16px; overflow: hidden;
+}
+.income-section-head {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 16px; align-items: baseline;
+  padding: 14px 20px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+.income-section-name {
+  font-size: 13px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text);
+}
+.income-section-count {
+  font-size: 11px; color: var(--text-subtle);
+  font-family: "JetBrains Mono", monospace;
+}
+.income-section-amount {
+  font-size: 16px; font-weight: 600;
+  text-align: right;
+}
+.income-section-amount.positive { color: #1a7f37; }
+.income-section-amount.muted { color: var(--text-subtle); }
+
 /* Accounts page */
 .accounts-section {
   background: var(--panel); border: 1px solid var(--border);

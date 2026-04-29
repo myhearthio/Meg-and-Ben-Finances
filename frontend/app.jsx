@@ -341,8 +341,35 @@ function Dashboard({ snap }) {
     <div className="main">
       <div className="page-title">Dashboard</div>
       <div className="page-subtitle">As of {snap.as_of_date} · year {snap.year}</div>
+      <NetWorthHero snap={snap} />
       <KpiRow snap={snap} />
       <MonthlyCharts snap={snap} />
+    </div>
+  );
+}
+
+function NetWorthHero({ snap }) {
+  const k = snap.kpis || {};
+  const cash = k.cash_on_hand || 0;
+  const inv = k.investments_total || 0;
+  const nw = k.net_worth ?? (cash + inv);
+  return (
+    <div className="nw-hero">
+      <div className="nw-hero-main">
+        <div className="nw-hero-label">Net Worth</div>
+        <div className="nw-hero-value">{fmt(nw)}</div>
+      </div>
+      <div className="nw-hero-breakdown">
+        <div className="nw-hero-part">
+          <div className="nw-hero-part-label">Investments</div>
+          <div className="nw-hero-part-value">{fmt(inv)}</div>
+        </div>
+        <div className="nw-hero-plus">+</div>
+        <div className="nw-hero-part">
+          <div className="nw-hero-part-label">Cash − Credit</div>
+          <div className={"nw-hero-part-value " + (cash >= 0 ? "" : "red")}>{fmt(cash)}</div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -581,8 +581,39 @@ body {
   overflow-x: auto;
 }
 
+/* Net Worth hero (Dashboard) */
+.nw-hero {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  color: white;
+  border-radius: var(--radius);
+  padding: 28px 32px;
+  margin-bottom: 16px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 32px;
+}
+.nw-hero-main { display: flex; flex-direction: column; gap: 6px; }
+.nw-hero-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: rgba(255,255,255,0.6); font-weight: 600;
+}
+.nw-hero-value {
+  font-size: 44px; font-weight: 600; letter-spacing: -0.02em;
+  font-family: "JetBrains Mono", monospace;
+}
+.nw-hero-breakdown { display: flex; align-items: center; gap: 20px; }
+.nw-hero-part { display: flex; flex-direction: column; gap: 4px; text-align: right; }
+.nw-hero-part-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: rgba(255,255,255,0.55); font-weight: 600;
+}
+.nw-hero-part-value {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 18px; font-weight: 500;
+}
+.nw-hero-part-value.red { color: #fca5a5; }
+.nw-hero-plus { color: rgba(255,255,255,0.4); font-size: 18px; font-weight: 300; }
+
 /* Investments */
-.inv-total-card {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 28px 32px; margin-bottom: 20px;
 }

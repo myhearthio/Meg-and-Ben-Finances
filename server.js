@@ -253,6 +253,17 @@ async function gatherSnapshot(year) {
 
   const snap = await buildSnapshot({ accounts: accountsWithCsv, plaidTx: finalTx, excludedTxIds, year });
   snap._plaidTx = finalTx;
+
+  // Investments total (sum of /api/investments rows). Add to kpis so frontend
+  // can compute net worth = cash_on_hand + investments_total.
+  try {
+    const invList = await db.kvGet(INVESTMENTS_KEY, []);
+    const invTotal = (Array.isArray(invList) ? invList : []).reduce((s, x) => s + (Number(x.value) || 0), 0);
+    snap.kpis = snap.kpis || {};
+    snap.kpis.investments_total = Math.round(invTotal * 100) / 100;
+    snap.kpis.net_worth = Math.round((snap.kpis.cash_on_hand + invTotal) * 100) / 100;
+  } catch (e) { console.log("inv total err:", e.message); }
+
   return snap;
 }
 

@@ -1005,11 +1005,93 @@ function AccountsView({ snap }) {
   );
 }
 
+function DraggablePill({ onOpen }) {
+  // Position is stored as {x, y} in px from the left/top of the viewport.
+  // We migrate from the old fixed bottom-right anchor on first run.
+  const [pos, setPos] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("mb_chat_pos") || "null");
+      if (saved && typeof saved.x === "number" && typeof saved.y === "number") return saved;
+    } catch {}
+    // Default: bottom-right, accounting for pill size (~140x44).
+    return { x: window.innerWidth - 160, y: window.innerHeight - 64 };
+  });
+  const dragState = useRef({
+    dragging: false, startX: 0, startY: 0, origX: 0, origY: 0, moved: false,
+  });
+  const elRef = useRef(null);
+
+  // Reclamp on viewport resize so the pill never lives off-screen.
+  useEffect(() => {
+    const clamp = () => setPos(p => clampPos(p, elRef.current));
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
+  }, []);
+
+  const clampPos = (p, el) => {
+    const w = (el && el.offsetWidth) || 140;
+    const h = (el && el.offsetHeight) || 44;
+    return {
+      x: Math.max(8, Math.min(window.innerWidth - w - 8, p.x)),
+      y: Math.max(8, Math.min(window.innerHeight - h - 8, p.y)),
+    };
+  };
+
+  const onPointerDown = (e) => {
+    dragState.current = {
+      dragging: true,
+      startX: e.clientX, startY: e.clientY,
+      origX: pos.x, origY: pos.y,
+      moved: false,
+    };
+    e.target.setPointerCapture && e.target.setPointerCapture(e.pointerId);
+  };
+
+  const onPointerMove = (e) => {
+    const s = dragState.current;
+    if (!s.dragging) return;
+    const dx = e.clientX - s.startX;
+    const dy = e.clientY - s.startY;
+    if (!s.moved && Math.hypot(dx, dy) > 4) s.moved = true;
+    if (s.moved) {
+      const next = clampPos({ x: s.origX + dx, y: s.origY + dy }, elRef.current);
+      setPos(next);
+    }
+  };
+
+  const onPointerUp = (e) => {
+    const s = dragState.current;
+    if (!s.dragging) return;
+    s.dragging = false;
+    if (s.moved) {
+      // Persist new position; suppress the click so we don't open chat.
+      const final = clampPos(pos, elRef.current);
+      setPos(final);
+      localStorage.setItem("mb_chat_pos", JSON.stringify(final));
+    } else {
+      // It was a real click → open chat.
+      onOpen();
+    }
+  };
+
+  return (
+    <button
+      ref={elRef}
+      className="fchat-pill fchat-pill-draggable"
+      style={{ left: pos.x + "px", top: pos.y + "px", right: "auto", bottom: "auto", touchAction: "none" }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    >💬 Connor</button>
+  );
+}
+
 function FloatingChat() {
   const [open, setOpen] = useState(() => localStorage.getItem("mb_chat") === "open");
   useEffect(() => { localStorage.setItem("mb_chat", open ? "open" : "closed"); }, [open]);
   if (!open) {
-    return <button className="fchat-pill" onClick={() => setOpen(true)}>💬 Connor</button>;
+    return <DraggablePill onOpen={() => setOpen(true)} />;
   }
   return (
     <div className="fchat-panel">

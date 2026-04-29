@@ -466,6 +466,8 @@ body {
   z-index: 100;
 }
 .fchat-pill:hover { background: #333; }
+.fchat-pill-draggable { cursor: grab; user-select: none; -webkit-user-select: none; }
+.fchat-pill-draggable:active { cursor: grabbing; }
 .fchat-panel {
   position: fixed; bottom: 24px; right: 24px;
   width: 420px; height: 580px; background: var(--panel);

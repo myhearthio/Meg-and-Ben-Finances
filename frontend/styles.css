@@ -535,18 +535,21 @@ body {
   font-size: 13px; max-width: 600px;
 }
 
-/* Income page */
-.income-section {
-  background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--radius); margin-bottom: 16px; overflow: hidden;
-}
+.income-section { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; overflow: hidden; }
 .income-section-head {
   display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 16px; align-items: baseline;
+  grid-template-columns: 24px 1fr auto auto;
+  gap: 12px; align-items: baseline;
   padding: 14px 20px;
   background: var(--panel-2);
   border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+.income-section-head:not(:has(+ .pnl-vendors)) { border-bottom: none; }
+.income-section-head:hover { background: #f5f3ee; }
+.income-section-caret {
+  color: var(--text-subtle); font-size: 12px;
+  align-self: center;
 }
 .income-section-name {
   font-size: 13px; font-weight: 600;

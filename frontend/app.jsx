@@ -1084,6 +1084,12 @@ function IncomeView({ snap }) {
   const [data, setData] = useState({ vendors: [], byCategory: {}, total: 0 });
   const [loading, setLoading] = useState(true);
   const [expandedVendors, setExpandedVendors] = useState({});
+  const [collapsedSections, setCollapsedSections] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("mb_income_collapsed") || "{\"excluded\":true}"); }
+    catch { return { excluded: true }; }
+  });
+  useEffect(() => { localStorage.setItem("mb_income_collapsed", JSON.stringify(collapsedSections)); }, [collapsedSections]);
+  const toggleSection = (k) => setCollapsedSections(s => ({ ...s, [k]: !s[k] }));
 
   useEffect(() => { localStorage.setItem("mb_year", year); }, [year]);
 
@@ -1182,13 +1188,16 @@ function IncomeView({ snap }) {
             const vendors = vendorsByCat[cat.key] || [];
             if (vendors.length === 0) return null;
             const catTotal = vendors.reduce((s, v) => s + v.amount, 0);
+            const collapsed = !!collapsedSections[cat.key];
             return (
               <div key={cat.key} className="income-section">
-                <div className="income-section-head">
+                <div className="income-section-head" onClick={() => toggleSection(cat.key)} style={{ cursor: "pointer" }}>
+                  <span className="income-section-caret">{collapsed ? "▸" : "▾"}</span>
                   <span className="income-section-name">{cat.label}</span>
                   <span className="income-section-count">{vendors.length} vendor{vendors.length===1?"":"s"}</span>
                   <span className={"income-section-amount mono" + (cat.key === "excluded" ? " muted" : " positive")}>{fmt(catTotal)}</span>
                 </div>
+                {!collapsed && (
                 <div className="pnl-vendors">
                   {vendors.map(v => {
                     const exp = !!expandedVendors[v.key + ":" + cat.key];
@@ -1233,6 +1242,7 @@ function IncomeView({ snap }) {
                     );
                   })}
                 </div>
+                )}
               </div>
             );
           })}

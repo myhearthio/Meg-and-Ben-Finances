@@ -119,6 +119,24 @@ function _queueOverrideUpdate(mutator) {
   return _writeQueue;
 }
 
+// ---- income overrides (separate namespace from expense overrides) ----
+// Same shape as the expense overrides blob:
+//   { [vendorKey]: "megan"|"ben"|"excluded", __tx: { [txId]: cat }, __names: {...}, __tx_desc: {...} }
+// Unknown vendors default to "excluded" so transfers/refunds don't inflate income totals
+// until the user explicitly tags them as Megan or Ben.
+const INCOME_OVERRIDES_KEY = "family-income-overrides";
+async function _readIncomeOverrides() { return (await db.kvGet(INCOME_OVERRIDES_KEY, {})) || {}; }
+async function _writeIncomeOverrides(obj) { await db.kvSet(INCOME_OVERRIDES_KEY, obj); }
+let _incomeWriteQueue = Promise.resolve();
+function _queueIncomeOverrideUpdate(mutator) {
+  _incomeWriteQueue = _incomeWriteQueue.then(async () => {
+    const obj = await _readIncomeOverrides();
+    await mutator(obj);
+    await _writeIncomeOverrides(obj);
+  }).catch(e => { console.log("income override queue err:", e.message); });
+  return _incomeWriteQueue;
+}
+
 function normalizeVendor(raw) {
   if (!raw) return "UNKNOWN";
   let s = String(raw).toUpperCase().trim();
@@ -189,6 +207,7 @@ async function gatherSnapshot(year) {
   }
 
   const overrides = await _readOverrides();
+  const incomeOverrides = await _readIncomeOverrides();
   const excludedTxIds = new Set();
   {
     const txOv = overrides.__tx || {};
@@ -197,9 +216,33 @@ async function gatherSnapshot(year) {
       if (k.startsWith("__")) continue;
       if (cat === "excluded") vendorExcluded.add(k);
     }
+    // Income-side excludes: vendors and per-tx tagged "excluded" in the income namespace.
+    // Income unknowns default to excluded too (so deposits don't inflate income until
+    // the user explicitly tags them as megan/ben).
+    const incomeTxOv = incomeOverrides.__tx || {};
+    const incomeVendorCat = {};
+    for (const [k, cat] of Object.entries(incomeOverrides)) {
+      if (k.startsWith("__")) continue;
+      incomeVendorCat[k] = cat;
+    }
     for (const t of finalTx) {
       const raw = String(t.name || "").trim();
       const txId = (t.date || "") + "|" + Number(t.amount) + "|" + raw.slice(0, 60);
+      // Deposit (income side): negative amount in a depository account.
+      const isDeposit = t.amount < 0 && (t.account_type || "").toLowerCase() === "depository";
+      if (isDeposit) {
+        const perTx = incomeTxOv[txId];
+        if (perTx === "excluded") { excludedTxIds.add(txId); continue; }
+        if (perTx) continue; // megan/ben → counts as income
+        const vKey = normalizeVendor(raw);
+        const vCat = incomeVendorCat[vKey];
+        if (vCat === "excluded") { excludedTxIds.add(txId); continue; }
+        if (vCat) continue; // megan/ben → counts
+        // Unknown income vendor → default excluded
+        excludedTxIds.add(txId);
+        continue;
+      }
+      // Expense side (existing logic)
       const perTx = txOv[txId];
       if (perTx === "excluded") { excludedTxIds.add(txId); continue; }
       if (perTx) continue;
@@ -560,6 +603,106 @@ app.post("/api/actuals", async (req, res) => {
         }
       } else if (body.vendor && body.category) {
         obj[body.vendor] = body.category;
+      } else { handled = false; }
+    });
+    if (!handled) return res.status(400).json({ error: "bad payload" });
+    invalidateCache();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- income (deposits) ----
+// Mirrors _buildActuals but for deposits (depository, amount < 0).
+// Categories: megan / ben / excluded. Default for unknown = excluded
+// (deposits we haven't seen before don't get counted as income until tagged).
+async function _buildIncome(yearOverride) {
+  const snap = await getSnapshot(false);
+  const tx = snap._plaidTx || [];
+  const overrides = await _readIncomeOverrides();
+  const txOv = overrides.__tx || {};
+  const nameOv = overrides.__names || {};
+  const txDescOv = overrides.__tx_desc || {};
+
+  const yr = String(yearOverride || Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());
+  const txList = [];
+  for (const t of tx) {
+    if (!t.date || !t.date.startsWith(yr)) continue;
+    const kind = (t.account_type || "").toLowerCase();
+    if (kind !== "depository") continue;
+    if (!(t.amount < 0)) continue; // deposits are negative in Plaid
+    const rawDesc = String(t.name || "").trim();
+    const normName = normalizeVendor(rawDesc);
+    const vendorKey = normName;
+    const txId = (t.date || "") + "|" + Number(t.amount) + "|" + rawDesc.slice(0, 60);
+    // For income, "amount" should display as a positive deposit value.
+    const amt = -Number(t.amount);
+    txList.push({ id: txId, date: (t.date || "").slice(0, 10), desc: rawDesc, amount: amt, vendorKey, vendorNorm: normName, mask: t.account_mask || "" });
+  }
+
+  const byVendor = {};
+  for (const t of txList) {
+    const txCat = txOv[t.id] || null;
+    const vOverride = overrides[t.vendorKey] || null;
+    // No auto-guess heuristics for income — default unknown to "excluded".
+    const cat = txCat || vOverride || "excluded";
+    let v = byVendor[t.vendorKey];
+    if (!v) v = byVendor[t.vendorKey] = { key: t.vendorKey, name: nameOv[t.vendorKey] || t.vendorNorm, rawSample: t.desc, amount: 0, count: 0, cat: vOverride || "excluded", vendorSaved: !!vOverride, txs: [] };
+    v.amount += t.amount;
+    v.count += 1;
+    const userSet = !!(txCat || vOverride);
+    const suggestion = vOverride || "excluded";
+    v.txs.push({ id: t.id, date: t.date, desc: txDescOv[t.id] || t.desc, amount: t.amount, cat, userSet, suggestion });
+  }
+  const vendors = Object.values(byVendor).sort((a, b) => b.amount - a.amount);
+  vendors.forEach(v => v.txs.sort((a, b) => (b.date || "").localeCompare(a.date || "")));
+  const byCategory = { megan: 0, ben: 0, excluded: 0 };
+  let total = 0;
+  for (const v of vendors) for (const tx of v.txs) {
+    byCategory[tx.cat] = (byCategory[tx.cat] || 0) + tx.amount;
+    if (tx.cat !== "excluded") total += tx.amount;
+  }
+  return { vendors, byCategory, total, year: yr };
+}
+
+app.get("/api/income", async (req, res) => {
+  try { res.json(await _buildIncome(req.query.year ? String(req.query.year) : null)); }
+  catch (e) { console.log("income err:", e); res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/income", async (req, res) => {
+  try {
+    const body = req.body || {};
+    let handled = true;
+    await _queueIncomeOverrideUpdate(async (obj) => {
+      if (body.tx_id && body.desc !== undefined) {
+        obj.__tx_desc = obj.__tx_desc || {};
+        if (body.desc) obj.__tx_desc[body.tx_id] = body.desc;
+        else delete obj.__tx_desc[body.tx_id];
+      } else if (body.tx_id && body.category) {
+        obj.__tx = obj.__tx || {};
+        obj.__tx[body.tx_id] = body.category;
+      } else if (body.vendor_key && body.name !== undefined) {
+        obj.__names = obj.__names || {};
+        if (body.name) obj.__names[body.vendor_key] = body.name;
+        else delete obj.__names[body.vendor_key];
+      } else if (body.vendor_key && body.category) {
+        obj[body.vendor_key] = body.category;
+        // Same logic as expense side: clear conflicting per-tx overrides so the
+        // new vendor category actually applies to every tx of this vendor.
+        if (obj.__tx) {
+          const snap = await getSnapshot(false).catch(() => null);
+          const plaidTx = (snap && snap._plaidTx) || [];
+          const vendorTxIds = new Set();
+          for (const t of plaidTx) {
+            const raw = String(t.name || "").trim();
+            const vKey = normalizeVendor(raw);
+            if (vKey === body.vendor_key) {
+              const txId = (t.date || "") + "|" + Number(t.amount) + "|" + raw.slice(0, 60);
+              vendorTxIds.add(txId);
+            }
+          }
+          for (const id of vendorTxIds) delete obj.__tx[id];
+        }
       } else { handled = false; }
     });
     if (!handled) return res.status(400).json({ error: "bad payload" });

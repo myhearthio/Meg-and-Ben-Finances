@@ -185,6 +185,7 @@ function TopBar({ refreshedAt, onRefresh, plaidStatus, tab, onTabChange, year, o
   const tabs = [
     { key: "dashboard", label: "Dashboard" },
     { key: "budget", label: "Budget & Expenses" },
+    { key: "income", label: "Income" },
     { key: "accounts", label: "Accounts" },
     { key: "settings", label: "Settings" },
   ];
@@ -327,6 +328,7 @@ function PlaidConnectButton({ hasItems, onChanged }) {
 
 function Main({ snap, tab }) {
   if (tab === "budget") return <BudgetView snap={snap} />;
+  if (tab === "income") return <IncomeView snap={snap} />;
   if (tab === "accounts") return <AccountsView snap={snap} />;
   if (tab === "settings") return <SettingsView />;
   return <Dashboard snap={snap} />;
@@ -1063,6 +1065,284 @@ function ChatPanel() {
         <input value={input} onChange={e => setInput(e.target.value)} placeholder="Ask Connor anything…" />
         <button type="submit" disabled={busy}>Send</button>
       </form>
+    </div>
+  );
+}
+
+// ---- Income ----
+// Mirrors the budget vendor/tx model but with a fixed three-bucket category
+// system: Megan / Ben / Excluded. New deposits default to Excluded so unknowns
+// don't inflate income totals — user explicitly tags as Megan or Ben.
+const INCOME_CATS = [
+  { key: "megan", label: "Megan" },
+  { key: "ben", label: "Ben" },
+  { key: "excluded", label: "Excluded" },
+];
+
+function IncomeView({ snap }) {
+  const [year, setYear] = useState(() => localStorage.getItem("mb_year") || String(snap.year));
+  const [data, setData] = useState({ vendors: [], byCategory: {}, total: 0 });
+  const [loading, setLoading] = useState(true);
+  const [expandedVendors, setExpandedVendors] = useState({});
+
+  useEffect(() => { localStorage.setItem("mb_year", year); }, [year]);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/income?year=" + year);
+      const j = await r.json();
+      setData(j || { vendors: [], byCategory: {}, total: 0 });
+    } finally { setLoading(false); }
+  }, [year]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const post = async (body) => {
+    await fetch("/api/income", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    await reload();
+  };
+
+  const setVendorCat = (vendor_key, category) => post({ vendor_key, category });
+  const setTxCat = (tx_id, category) => post({ tx_id, category });
+  const renameVendor = (vendor_key, name) => post({ vendor_key, name });
+  const renameTx = (tx_id, desc) => post({ tx_id, desc });
+
+  const toggleVendor = (vk) => setExpandedVendors(e => ({ ...e, [vk]: !e[vk] }));
+
+  const nextYear = Number(snap.year) + 1;
+  const years = [String(snap.year - 2), String(snap.year - 1), String(snap.year), String(nextYear)];
+
+  // Pending = vendors that haven't been categorized yet (default = excluded but not vendorSaved).
+  const pendingTxs = [];
+  for (const v of (data.vendors || [])) {
+    for (const tx of (v.txs || [])) {
+      if (!tx.userSet) pendingTxs.push({ ...tx, vendorKey: v.key, vendorName: v.name });
+    }
+  }
+  pendingTxs.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  const byCat = data.byCategory || {};
+  const meganTotal = byCat.megan || 0;
+  const benTotal = byCat.ben || 0;
+  const excludedTotal = byCat.excluded || 0;
+  const incomeTotal = meganTotal + benTotal;
+
+  // Group vendors by their resolved category (uses tx-level cats since user can split a vendor).
+  const vendorsByCat = { megan: [], ben: [], excluded: [] };
+  for (const v of (data.vendors || [])) {
+    const sumByCat = {};
+    for (const tx of (v.txs || [])) sumByCat[tx.cat] = (sumByCat[tx.cat] || 0) + tx.amount;
+    for (const [cat, amt] of Object.entries(sumByCat)) {
+      (vendorsByCat[cat] = vendorsByCat[cat] || []).push({ ...v, amount: amt });
+    }
+  }
+  for (const cat of Object.keys(vendorsByCat)) {
+    vendorsByCat[cat].sort((a, b) => b.amount - a.amount);
+  }
+
+  return (
+    <div className="main">
+      <div className="page-title">Income</div>
+      <div className="page-subtitle">All deposits for {year}. Tag each as Megan, Ben, or Excluded (transfers, refunds, etc.).</div>
+      <div className="year-pills">
+        {years.map(y => (
+          <div key={y} className={"year-pill" + (y === year ? " active" : "")} onClick={() => setYear(y)}>{y}</div>
+        ))}
+      </div>
+
+      {loading && <div style={{ padding: 24, color: "#888" }}>Loading…</div>}
+
+      {!loading && (
+        <>
+          <div className="kpi-row" style={{ marginTop: 16 }}>
+            <div className="kpi"><div className="kpi-label">Total Income</div><div className="kpi-value">{fmt(incomeTotal)}</div><div className="kpi-sub">Megan + Ben</div></div>
+            <div className="kpi"><div className="kpi-label">Megan</div><div className="kpi-value">{fmt(meganTotal)}</div></div>
+            <div className="kpi"><div className="kpi-label">Ben</div><div className="kpi-value">{fmt(benTotal)}</div></div>
+            <div className="kpi"><div className="kpi-label">Excluded</div><div className="kpi-value" style={{ color: "#888" }}>{fmt(excludedTotal)}</div><div className="kpi-sub">transfers / refunds</div></div>
+          </div>
+
+          {pendingTxs.length > 0 && (
+            <IncomeApprovalCard pendingTxs={pendingTxs}
+              onApprove={async (txId, cat, vendorKey) => {
+                // "Approve" = save the vendor cat (so future deposits auto-fill).
+                await post({ vendor_key: vendorKey, category: cat });
+              }}
+              onApproveTx={async (txId, cat) => { await setTxCat(txId, cat); }}
+              onRenameVendor={renameVendor}
+              onRenameTx={renameTx}
+            />
+          )}
+
+          {INCOME_CATS.map(cat => {
+            const vendors = vendorsByCat[cat.key] || [];
+            if (vendors.length === 0) return null;
+            const catTotal = vendors.reduce((s, v) => s + v.amount, 0);
+            return (
+              <div key={cat.key} className="accounts-section" style={{ marginTop: 18 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+                  <h3 style={{ margin: 0 }}>{cat.label}</h3>
+                  <div style={{ fontSize: 18, fontWeight: 600, color: cat.key === "excluded" ? "#888" : "#1a7f37" }}>{fmt(catTotal)}</div>
+                </div>
+                <div className="pnl-vendor-list">
+                  {vendors.map(v => {
+                    const exp = !!expandedVendors[v.key + ":" + cat.key];
+                    const vTxs = (v.txs || []).filter(tx => tx.cat === cat.key);
+                    return (
+                      <div key={v.key + ":" + cat.key} className="pnl-vendor-row">
+                        <div className="pnl-vendor-head" onClick={() => toggleVendor(v.key + ":" + cat.key)}>
+                          <span className="pnl-vendor-arrow">{exp ? "▾" : "▸"}</span>
+                          <div className="pnl-vendor-mid">
+                            <EditableText value={v.name} onSave={n => renameVendor(v.key, n)} className="pnl-vendor-name" />
+                            <span className="pnl-vendor-meta">{vTxs.length} deposit{vTxs.length===1?"":"s"}</span>
+                          </div>
+                          <select
+                            className="pnl-tx-select"
+                            value={cat.key}
+                            onClick={e => e.stopPropagation()}
+                            onChange={e => setVendorCat(v.key, e.target.value)}
+                          >
+                            {INCOME_CATS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+                          </select>
+                          <div className="pnl-vendor-amt">{fmt(v.amount)}</div>
+                        </div>
+                        {exp && (
+                          <div className="pnl-tx-list">
+                            {vTxs.map(tx => (
+                              <div key={tx.id} className="pnl-tx-row">
+                                <div className="pnl-tx-date mono">{fmtTxDate(tx.date)}</div>
+                                <EditableText value={tx.desc} onSave={n => renameTx(tx.id, n)} className="pnl-tx-desc" />
+                                <select className="pnl-tx-select" value={tx.cat} onChange={e => setTxCat(tx.id, e.target.value)}>
+                                  {INCOME_CATS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+                                </select>
+                                <div className="pnl-tx-amt">{fmt(tx.amount)}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+
+          {(data.vendors || []).length === 0 && (
+            <div className="accounts-section" style={{ marginTop: 18 }}>
+              <p style={{ color: "#888" }}>No deposits found for {year}. Make sure your accounts are connected via the Accounts tab.</p>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function IncomeApprovalCard({ pendingTxs, onApprove, onApproveTx, onRenameVendor, onRenameTx }) {
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("mb_income_approval_collapsed") === "1");
+  const [page, setPage] = useState(0);
+  const [rowCats, setRowCats] = useState({});
+  useEffect(() => { localStorage.setItem("mb_income_approval_collapsed", collapsed ? "1" : "0"); }, [collapsed]);
+
+  const PAGE_SIZE = 10;
+  const totalPages = Math.max(1, Math.ceil(pendingTxs.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages - 1);
+  const pageTxs = pendingTxs.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+  const pageReady = pageTxs.filter(tx => rowCats[tx.id]);
+  const setCat = (id, cat) => setRowCats(rc => ({ ...rc, [id]: cat }));
+
+  const approveAllShown = async () => {
+    setBulkBusy(true);
+    try {
+      // Group by vendor to minimize writes.
+      const byVendor = {};
+      for (const tx of pageReady) {
+        const cat = rowCats[tx.id];
+        if (!byVendor[tx.vendorKey]) byVendor[tx.vendorKey] = { cat, count: 0 };
+        byVendor[tx.vendorKey].count++;
+      }
+      for (const [vk, { cat }] of Object.entries(byVendor)) {
+        await onApprove(null, cat, vk);
+      }
+      setRowCats({});
+    } finally { setBulkBusy(false); }
+  };
+
+  return (
+    <div className={"approval-card" + (collapsed ? " approval-collapsed" : "")} style={{ marginTop: 16 }}>
+      <div className="approval-head">
+        <button className="approval-collapse-btn" onClick={() => setCollapsed(c => !c)}>{collapsed ? "▸" : "▾"}</button>
+        <div className="approval-title">Income Approval Queue</div>
+        <div className="approval-sub">
+          {pendingTxs.length} unconfirmed deposit{pendingTxs.length === 1 ? "" : "s"}
+          {totalPages > 1 && !collapsed && <> · page {safePage+1} of {totalPages}</>}
+        </div>
+        {pageReady.length > 0 && !collapsed && (
+          <button
+            className={"approval-bulk-btn" + (bulkBusy ? " disabled" : "")}
+            disabled={bulkBusy}
+            onClick={approveAllShown}
+          >Approve {pageReady.length} on this page</button>
+        )}
+      </div>
+      {!collapsed && (
+        <>
+          <div className="approval-list">
+            {pageTxs.map(tx => (
+              <IncomeApprovalRow key={tx.id} tx={tx}
+                cat={rowCats[tx.id] || ""}
+                onCatChange={(c) => setCat(tx.id, c)}
+                onApprove={async () => {
+                  const c = rowCats[tx.id];
+                  if (!c) return;
+                  await onApprove(tx.id, c, tx.vendorKey);
+                }}
+                onRenameVendor={(n) => onRenameVendor(tx.vendorKey, n)}
+                onRenameTx={(n) => onRenameTx(tx.id, n)}
+              />
+            ))}
+          </div>
+          {totalPages > 1 && (
+            <div className="approval-pager">
+              <button disabled={safePage === 0} onClick={() => setPage(p => Math.max(0, p-1))}>‹ Prev</button>
+              <span>{safePage+1} / {totalPages}</span>
+              <button disabled={safePage >= totalPages - 1} onClick={() => setPage(p => p+1)}>Next ›</button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function IncomeApprovalRow({ tx, cat, onCatChange, onApprove, onRenameVendor, onRenameTx }) {
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    if (!cat || busy) return;
+    setBusy(true);
+    try { await onApprove(); } finally { setBusy(false); }
+  };
+  return (
+    <div className="approval-row">
+      <div className="approval-row-date">{fmtTxDate(tx.date)}</div>
+      <div className="approval-row-vendor">
+        <EditableText value={tx.vendorName} onSave={onRenameVendor} className="approval-row-name" />
+        <EditableText value={tx.desc} onSave={onRenameTx} className="approval-row-desc" />
+      </div>
+      <div className="approval-row-amount" style={{ color: "#1a7f37" }}>{fmt(tx.amount)}</div>
+      <select className="approval-row-select" value={cat} onChange={e => onCatChange(e.target.value)}>
+        <option value="">Choose…</option>
+        {INCOME_CATS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+      </select>
+      <button className={"approval-row-btn" + ((!cat || busy) ? " disabled" : "")} disabled={!cat || busy} onClick={go}>
+        {busy ? "…" : "Approve"}
+      </button>
     </div>
   );
 }

@@ -708,3 +708,134 @@ body {
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 8px 10px; font-size: 13px; font-family: inherit; background: var(--panel-2);
 }
+
+
+/* ---------------------------------------------------- */
+/* Mobile (≤ 760px). Stack sidebar under content,        */
+/* collapse multi-column grids, allow tabs to scroll.    */
+/* ---------------------------------------------------- */
+@media (max-width: 760px) {
+  body { font-size: 14px; }
+
+  /* App shell: stack vertically. No sidebar on mobile —
+     it's not useful (account list); we'll surface it as a
+     Drawer later if Ben asks. For now, hide it. */
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: 56px 1fr;
+    height: auto; min-height: 100vh;
+  }
+  .topbar { grid-column: 1; }
+  .sidebar { display: none; }
+  .main { padding: 16px 14px 80px; }
+
+  /* TopBar: horizontal scroll for tabs, hide brand subtitle. */
+  .topbar { padding: 0 12px; }
+  .brand { font-size: 14px; }
+  .brand-sub { display: none; }
+  .topbar-left { gap: 8px; min-width: 0; flex: 1; }
+  .tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { white-space: nowrap; flex-shrink: 0; padding: 6px 10px; font-size: 12px; }
+  .topbar-right { gap: 6px; }
+  .year-switch { font-size: 12px; }
+  .year-btn { padding: 4px 8px; font-size: 11px; }
+  .refresh-btn { display: none; }
+
+  /* Page chrome */
+  .page-title { font-size: 18px; }
+  .page-subtitle { font-size: 12px; margin-bottom: 16px; }
+
+  /* Net Worth hero — stack breakdown below number */
+  .nw-hero {
+    flex-direction: column; align-items: flex-start;
+    padding: 20px; gap: 16px;
+  }
+  .nw-hero-value { font-size: 32px; }
+  .nw-hero-breakdown {
+    width: 100%; justify-content: space-between;
+    gap: 12px;
+  }
+  .nw-hero-part { text-align: left; }
+  .nw-hero-plus { display: none; }
+
+  /* KPIs — 2 columns instead of 5 */
+  .kpi-row { grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+  .kpi-card { padding: 12px; }
+  .kpi-value { font-size: 18px; }
+  .kpi-label { font-size: 10px; }
+
+  /* Charts */
+  .monthly-charts { gap: 12px; }
+  .chart-card { padding: 14px; }
+
+  /* Approval queue rows — let them wrap */
+  .approval-card { padding: 14px; }
+  .approval-row {
+    grid-template-columns: 1fr auto;
+    grid-auto-rows: auto;
+    gap: 6px 10px;
+    padding: 10px;
+  }
+  .approval-row-date { grid-column: 1; font-size: 11px; }
+  .approval-row-vendor { grid-column: 1 / 3; }
+  .approval-row-amount { grid-column: 2; grid-row: 1; }
+  .approval-row-select { grid-column: 1 / 3; width: 100%; }
+  .approval-row-btn { grid-column: 1 / 3; }
+
+  /* Budget / Income category rows */
+  .pnl-cat-row {
+    grid-template-columns: 28px 1fr auto;
+    gap: 8px; padding: 12px 14px;
+  }
+  .pnl-cat-row > *:nth-child(3) { display: none; } /* hide bar/middle filler if any */
+  .pnl-vendor-row {
+    grid-template-columns: 24px 1fr auto;
+    gap: 8px; padding: 10px 14px 10px 40px;
+  }
+  .pnl-vendor-row > *:nth-child(3) { display: none; }
+  .pnl-tx-row {
+    grid-template-columns: 70px 1fr auto;
+    gap: 8px; padding: 8px 14px 8px 64px;
+  }
+  .pnl-tx-row > *:nth-child(3) { display: none; }
+
+  /* Income section heads */
+  .income-section-head {
+    grid-template-columns: 20px 1fr auto;
+    gap: 8px; padding: 12px 14px;
+  }
+
+  /* Investments rows — stack actions below */
+  .inv-row { padding: 14px; }
+  .inv-row-main {
+    grid-template-columns: 1fr auto;
+    grid-auto-rows: auto; gap: 6px 10px;
+  }
+  .inv-row-name { grid-column: 1; }
+  .inv-row-pct { grid-column: 2; grid-row: 1; align-self: center; }
+  .inv-row-value { grid-column: 1 / 3; text-align: left; font-size: 22px; }
+  .inv-row-actions { grid-column: 1 / 3; flex-wrap: wrap; gap: 6px; }
+  .inv-row-actions .inv-btn-secondary,
+  .inv-row-actions .inv-btn-primary,
+  .inv-row-actions .inv-btn-ghost { flex: 1 1 auto; justify-content: center; text-align: center; }
+  .inv-add-form {
+    grid-template-columns: 1fr;
+  }
+  .inv-total-card { padding: 20px; }
+  .inv-total-value { font-size: 30px; }
+
+  /* Floating chat — full width on phones */
+  .fchat { right: 8px; left: 8px; bottom: 8px; width: auto !important; }
+
+  /* Editable inputs / selects: bigger tap targets */
+  select, input, button { font-size: 14px; }
+  .approval-row-select, .pnl-cat-select, .pnl-vendor-select { min-height: 36px; }
+}
+
+/* Larger phones / small tablets */
+@media (min-width: 761px) and (max-width: 1024px) {
+  .app { grid-template-columns: 220px 1fr; }
+  .kpi-row { grid-template-columns: repeat(3, 1fr); }
+  .nw-hero-value { font-size: 36px; }
+}

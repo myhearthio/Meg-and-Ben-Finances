@@ -1193,6 +1193,7 @@ const INCOME_CATS = [
 function IncomeView({ snap }) {
   const [year, setYear] = useState(() => localStorage.getItem("mb_year") || String(snap.year));
   const [data, setData] = useState({ vendors: [], byCategory: {}, total: 0 });
+  const [forecast, setForecast] = useState({});
   const [loading, setLoading] = useState(true);
   const [expandedVendors, setExpandedVendors] = useState({});
   const [collapsedSections, setCollapsedSections] = useState(() => {
@@ -1207,13 +1208,27 @@ function IncomeView({ snap }) {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch("/api/income?year=" + year);
-      const j = await r.json();
+      const [r1, r2] = await Promise.all([
+        fetch("/api/income?year=" + year),
+        fetch("/api/income-forecast?year=" + year),
+      ]);
+      const j = await r1.json();
+      const f = await r2.json();
       setData(j || { vendors: [], byCategory: {}, total: 0 });
+      setForecast(f || {});
     } finally { setLoading(false); }
   }, [year]);
 
   useEffect(() => { reload(); }, [reload]);
+
+  const saveForecast = async (person, amount) => {
+    setForecast(f => ({ ...f, [person]: amount }));
+    await fetch("/api/income-forecast", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ person, amount, year }),
+    });
+  };
 
   const post = async (body) => {
     await fetch("/api/income", {
@@ -1282,6 +1297,14 @@ function IncomeView({ snap }) {
             <div className="kpi"><div className="kpi-label">Ben</div><div className="kpi-value">{fmt(benTotal)}</div></div>
             <div className="kpi"><div className="kpi-label">Excluded</div><div className="kpi-value" style={{ color: "#888" }}>{fmt(excludedTotal)}</div><div className="kpi-sub">transfers / refunds</div></div>
           </div>
+
+          <IncomeForecastCard
+            year={year}
+            meganActual={meganTotal}
+            benActual={benTotal}
+            forecast={forecast}
+            onSave={saveForecast}
+          />
 
           {pendingTxs.length > 0 && (
             <IncomeApprovalCard pendingTxs={pendingTxs}
@@ -1365,6 +1388,87 @@ function IncomeView({ snap }) {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+function IncomeForecastCard({ year, meganActual, benActual, forecast, onSave }) {
+  const meganF = Number(forecast.megan || 0);
+  const benF = Number(forecast.ben || 0);
+  const totalF = meganF + benF;
+  const totalA = meganActual + benActual;
+
+  const Row = ({ label, actual, forecastVal, person }) => {
+    const [editing, setEditing] = useState(false);
+    const [val, setVal] = useState(String(forecastVal || ""));
+    useEffect(() => { setVal(String(forecastVal || "")); }, [forecastVal]);
+    const pct = forecastVal > 0 ? Math.min(100, (actual / forecastVal) * 100) : 0;
+    const remaining = forecastVal - actual;
+    const commit = () => {
+      const n = Number(String(val).replace(/[^0-9.]/g, "")) || 0;
+      onSave(person, n);
+      setEditing(false);
+    };
+    return (
+      <div style={{ padding: "12px 0", borderBottom: "1px solid #eee" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 600 }}>{label}</div>
+          <div style={{ display: "flex", gap: 16, alignItems: "baseline", flexWrap: "wrap" }}>
+            <div><span style={{ color: "#888", fontSize: 12 }}>Actual: </span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(actual)}</span></div>
+            <div>
+              <span style={{ color: "#888", fontSize: 12 }}>Forecast: </span>
+              {editing ? (
+                <>
+                  <input
+                    type="text"
+                    value={val}
+                    autoFocus
+                    onChange={e => setVal(e.target.value)}
+                    onBlur={commit}
+                    onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false); }}
+                    style={{ width: 110, padding: "4px 6px", fontSize: 14, border: "1px solid #c7d2fe", borderRadius: 4, fontVariantNumeric: "tabular-nums" }}
+                  />
+                </>
+              ) : (
+                <span
+                  onClick={() => setEditing(true)}
+                  style={{ fontVariantNumeric: "tabular-nums", cursor: "pointer", borderBottom: "1px dashed #999", paddingBottom: 1 }}
+                  title="Click to edit"
+                >{forecastVal > 0 ? fmt(forecastVal) : "Set…"}</span>
+              )}
+            </div>
+            {forecastVal > 0 && (
+              <div style={{ color: remaining >= 0 ? "#15803d" : "#b91c1c", fontVariantNumeric: "tabular-nums" }}>
+                {remaining >= 0 ? `${fmt(remaining)} to go` : `${fmt(Math.abs(remaining))} over`}
+              </div>
+            )}
+          </div>
+        </div>
+        {forecastVal > 0 && (
+          <div style={{ marginTop: 8, height: 6, background: "#eef2ff", borderRadius: 3, overflow: "hidden" }}>
+            <div style={{ width: `${pct}%`, height: "100%", background: actual > forecastVal ? "#b91c1c" : "#15803d", transition: "width .3s" }}/>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+        <h3 style={{ margin: 0 }}>Income Forecast — {year}</h3>
+        {totalF > 0 && (
+          <div style={{ fontSize: 13, color: "#666" }}>
+            <span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(totalA)}</span>
+            <span> of </span>
+            <span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(totalF)}</span>
+            <span> ({totalF > 0 ? Math.round((totalA / totalF) * 100) : 0}%)</span>
+          </div>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>Set what you expect each person to earn this year. Compare to actual income tagged to them.</div>
+      <Row label="Megan" actual={meganActual} forecastVal={meganF} person="megan"/>
+      <Row label="Ben" actual={benActual} forecastVal={benF} person="ben"/>
     </div>
   );
 }

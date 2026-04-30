@@ -196,15 +196,18 @@ ${invLine}
 Net Worth: $${Math.round(k.net_worth || 0).toLocaleString()}
 
 == TOOLS ==
-- get_top_expenses(month?, date_from?, date_to?, limit?, group_by?)
-- get_vendor_total(vendor)
-- get_category_breakdown(category, by_month?)
-- get_forecast_vs_actual()
-- find_transactions(query?, amount?, date_from?, date_to?, mask?)
+All transaction tools accept an optional \`year\` parameter (4-digit, e.g. 2025). Default = current year. Plaid + CSV data covers 2025 + 2026; CSVs may go further back.
+- get_top_expenses(year?, month?, date_from?, date_to?, limit?, group_by?)
+- get_vendor_total(vendor, year?)
+- get_category_breakdown(category, year?, by_month?)
+- get_forecast_vs_actual(year?)
+- find_transactions(query?, amount?, year?, date_from?, date_to?, mask?)
 - get_investments() — full position list (Rockefeller, 401k, real estate equity, LLY, 529, etc.)
 - navigate(label, tab, scroll_to?)
 - save_memory / read_memory
 - write_to_harold_md — only when the user explicitly says so.
+
+When Ben or Megan ask about a prior year ("what did we spend on travel in 2025?"), pass year:2025 — don't refuse. The KPIs above are current-year only; everything else needs a tool call with the year filter.
 
 == MEMORY ==
 ${mem.facts.length ? mem.facts.map(f => "- " + (f.content || f)).join("\n") : "(none saved)"}

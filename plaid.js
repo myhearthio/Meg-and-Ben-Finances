@@ -142,8 +142,10 @@ async function getYTDTransactions() {
   await _loadItems();
   const items = memoryItems || [];
   if (!items.length) return [];
-  const year = new Date().getFullYear();
-  const start = `${year}-01-01`;
+  // Pull current year + prior year so Harold has multi-year visibility.
+  // Plaid free tier supports up to 24 months back; this is well within that.
+  const thisYear = new Date().getFullYear();
+  const start = `${thisYear - 1}-01-01`;
   const end = new Date().toISOString().slice(0, 10);
   const all = [];
   for (const it of items) {

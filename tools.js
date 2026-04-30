@@ -3,7 +3,20 @@
 // Numbers returned here are the ONLY numbers Harold is allowed to quote back.
 //
 // All persistent state reads from Postgres via data.js. NEVER read/write disk.
+//
+// HAROLD RECONCILES TO THE DASHBOARD. Every total/ranking/category number Harold
+// quotes is sourced from the same `_buildActuals(year)` / `_buildIncome(year)`
+// pipeline that backs the Dashboard. We lazy-require server.js inside the
+// handlers (not at top level) to avoid a circular import at module load.
 const db = require("./data");
+
+// Lazy accessor — resolved on first call, after server.js's module.exports has
+// been populated.
+let _server = null;
+function srv() {
+  if (!_server) _server = require("./server");
+  return _server;
+}
 
 // Categories are now managed via /api/categories (kv-stored). We read fresh
 // each time so Harold sees newly-added categories without a server restart.
@@ -190,103 +203,152 @@ async function toolDefs() {
 }
 
 // --- tool implementations ---
+//
+// All "money" tools (totals, rankings, vendor sums, category breakdowns) call
+// _buildActuals(year) from server.js — the SAME function that powers the
+// Dashboard's Budget tab. This guarantees every number Harold quotes matches
+// what the user sees on the Dashboard for the same year. No parallel math.
+//
+// find_transactions is the lone exception: it's a search across raw tx (so
+// users can find a charge by amount/keyword even if it's been excluded). It
+// applies cleanDescription on output and labels excluded results so Harold
+// never silently includes them in totals.
 
 async function t_find_transactions(input, snap) {
-  const tx = snap._plaidTx || [];
+  const { _buildActuals, _buildIncome, cleanDescription } = srv();
+  const yr = resolveYear(input);
   const q = (input.query || "").toLowerCase();
   const amt = input.amount != null ? Math.abs(Number(input.amount)) : null;
-  const yr = resolveYear(input);
-  // Default range = whole year. If date_from/date_to passed, those override.
   const df = input.date_from || `${yr}-01-01`;
   const dt = input.date_to   || `${yr}-12-31`;
   const mask = input.mask;
-  const limit = input.limit ? Math.max(1, input.limit) : Infinity;
+  const limit = input.limit ? Math.max(1, input.limit) : 50;
+
+  // Pull tx from Dashboard pipelines so categorization + cleaned descriptions
+  // are consistent with the UI.
+  const actuals = await _buildActuals(yr);
+  const income = await _buildIncome(yr);
 
   const hits = [];
-  for (const t of tx) {
-    if (!t.date) continue;
-    if (mask && t.account_mask !== mask) continue;
-    if (t.date < df) continue;
-    if (t.date > dt) continue;
-    const desc = ((t.name || "") + " " + (t.merchant_name || "") + " " + (t.original_description || "")).toLowerCase();
-    if (q && !desc.includes(q)) continue;
-    if (amt != null && Math.abs(Math.abs(t.amount) - amt) > 0.01) continue;
-    hits.push({ date: t.date, amount: round(t.amount), name: t.name, mask: t.account_mask });
+  // Expenses (positive amounts)
+  for (const v of actuals.vendors) {
+    for (const t of v.txs) {
+      if (!t.date || t.date < df || t.date > dt) continue;
+      if (mask && t.mask !== mask) continue;
+      const desc = (t.desc || "").toLowerCase();
+      if (q && !desc.includes(q)) continue;
+      if (amt != null && Math.abs(t.amount - amt) > 0.01) continue;
+      hits.push({
+        date: t.date, amount: round(t.amount), name: t.desc, mask: t.mask,
+        category: t.cat, vendor: v.name, side: "expense",
+      });
+    }
+  }
+  // Income (negative-from-Plaid; _buildIncome flips sign so amount > 0)
+  for (const v of income.vendors) {
+    for (const t of v.txs) {
+      if (!t.date || t.date < df || t.date > dt) continue;
+      if (mask && t.mask !== mask) continue;
+      const desc = (t.desc || "").toLowerCase();
+      if (q && !desc.includes(q)) continue;
+      if (amt != null && Math.abs(t.amount - amt) > 0.01) continue;
+      hits.push({
+        date: t.date, amount: round(t.amount), name: t.desc, mask: t.mask,
+        category: t.cat, vendor: v.name, side: "income",
+      });
+    }
   }
   hits.sort((a, b) => b.date.localeCompare(a.date));
   return {
     count: hits.length,
     period: { from: df, to: dt },
-    total: round(hits.reduce((s, h) => s + h.amount, 0)),
     shown: Math.min(hits.length, limit),
     transactions: hits.slice(0, limit),
+    note: "Includes Excluded tx — do NOT sum these for a total. For totals/rankings use get_top_expenses or get_category_breakdown.",
   };
 }
 
 async function t_get_vendor_total(input, snap) {
-  const result = await t_find_transactions({ query: input.vendor, year: input.year }, snap);
-  const positive = result.transactions.filter(t => t.amount > 0);
-  if (!positive.length) return { vendor: input.vendor, year: resolveYear(input), found: false, count: 0, total: 0 };
-  const dates = positive.map(t => t.date).sort();
+  const { _buildActuals } = srv();
+  const yr = resolveYear(input);
+  const q = String(input.vendor || "").toLowerCase();
+  if (!q) return { vendor: input.vendor, year: yr, found: false, count: 0, total: 0 };
+
+  const actuals = await _buildActuals(yr);
+  // Match against vendor name (post-cleanup) — substring, case-insensitive.
+  const matches = actuals.vendors.filter(v =>
+    (v.name || "").toLowerCase().includes(q) ||
+    (v.key || "").toLowerCase().includes(q)
+  );
+  if (!matches.length) return { vendor: input.vendor, year: yr, found: false, count: 0, total: 0 };
+
+  // Aggregate across matching vendors. Excluded tx are dropped from total.
+  let total = 0, count = 0;
+  let first = null, last = null;
+  const sample = [];
+  const cats = {};
+  for (const v of matches) {
+    for (const t of v.txs) {
+      if (t.cat === "excluded") continue;
+      total += t.amount; count++;
+      cats[t.cat] = (cats[t.cat] || 0) + t.amount;
+      if (!first || t.date < first) first = t.date;
+      if (!last  || t.date > last)  last  = t.date;
+      if (sample.length < 20) sample.push({ date: t.date, amount: round(t.amount), desc: t.desc, category: t.cat });
+    }
+  }
   return {
-    vendor: input.vendor, year: resolveYear(input), found: true, count: positive.length,
-    total: round(positive.reduce((s, t) => s + t.amount, 0)),
-    date_range: { first: dates[0], last: dates[dates.length - 1] },
-    transactions: positive.slice(0, 20),
+    vendor: input.vendor, year: yr, found: count > 0, count,
+    total: round(total),
+    date_range: first ? { first, last } : null,
+    by_category: Object.fromEntries(Object.entries(cats).map(([k, v]) => [k, round(v)])),
+    matched_vendors: matches.map(v => ({ name: v.name, key: v.key, total_excluding_excluded: round(v.txs.filter(t => t.cat !== "excluded").reduce((s, t) => s + t.amount, 0)) })),
+    transactions: sample,
+    note: "Excluded tx removed from total. Numbers match what the Dashboard shows for this vendor in this year.",
   };
 }
 
 async function t_get_category_breakdown(input, snap) {
-  const ov = await readOverrides();
+  const { _buildActuals } = srv();
   const yr = resolveYear(input);
-  const forecast = await readForecast(yr);
   const requestedCat = input.category;
-  const tx = snap._plaidTx || [];
-  const txOv = ov.__tx || {};
+  const forecast = await readForecast(yr);
 
+  const actuals = await _buildActuals(yr);
   let total = 0, count = 0;
   const byMonth = {};
   const vendorMap = {};
-
-  for (const t of tx) {
-    if (!t.date || !t.date.startsWith(yr)) continue;
-    if (t.amount <= 0) continue;
-    const vKey = normalizeVendor(t.name);
-    const txId = mkTxId(t);
-    const cat = txOv[txId] || ov[vKey] || "other";
-    if (cat !== requestedCat) continue;
-    total += t.amount; count++;
-    const m = t.date.slice(0, 7);
-    byMonth[m] = (byMonth[m] || 0) + t.amount;
-    vendorMap[vKey] = (vendorMap[vKey] || { name: vKey, total: 0, count: 0 });
-    vendorMap[vKey].total += t.amount;
-    vendorMap[vKey].count++;
+  for (const v of actuals.vendors) {
+    for (const t of v.txs) {
+      if (t.cat !== requestedCat) continue;
+      total += t.amount; count++;
+      const m = (t.date || "").slice(0, 7);
+      if (m) byMonth[m] = (byMonth[m] || 0) + t.amount;
+      if (!vendorMap[v.key]) vendorMap[v.key] = { name: v.name, total: 0, count: 0 };
+      vendorMap[v.key].total += t.amount;
+      vendorMap[v.key].count++;
+    }
   }
-
   const forecastAnnual = forecast[requestedCat] || 0;
   const vendors = Object.values(vendorMap).map(v => ({ ...v, total: round(v.total) })).sort((a, b) => b.total - a.total);
-
   const out = {
-    category: requestedCat,
-    year: yr,
-    actual: round(total),
-    charge_count: count,
+    category: requestedCat, year: yr,
+    actual: round(total), charge_count: count,
     forecast_annual: forecastAnnual,
     remaining: round(forecastAnnual - total),
     pct_consumed: forecastAnnual ? Math.round((total / forecastAnnual) * 100) : null,
     top_vendors: vendors.slice(0, 10),
+    note: "Sourced from the same pipeline as the Dashboard's Budget tab.",
   };
   if (input.by_month) out.by_month = Object.fromEntries(Object.entries(byMonth).map(([k, v]) => [k, round(v)]));
   return out;
 }
 
 async function t_get_top_expenses(input, snap) {
-  const tx = snap._plaidTx || [];
-  const ov = await readOverrides();
-  const txOv = ov.__tx || {};
+  const { _buildActuals } = srv();
+  const yr = resolveYear(input);
   const limit = Math.min(input.limit || 10, 50);
   const groupBy = input.group_by || "vendor";
-  const yr = resolveYear(input);
 
   let df = input.date_from, dt = input.date_to;
   if (input.month) {
@@ -295,76 +357,91 @@ async function t_get_top_expenses(input, snap) {
     const lastDay = new Date(y, m, 0).getDate();
     dt = `${input.month}-${String(lastDay).padStart(2, "0")}`;
   }
-  // If still no range, use whole year.
   if (!df) df = `${yr}-01-01`;
   if (!dt) dt = `${yr}-12-31`;
 
-  const excludedVendors = new Set();
-  for (const [k, v] of Object.entries(ov)) {
-    if (k.startsWith("__")) continue;
-    if (v === "excluded") excludedVendors.add(k);
-  }
-
-  const vendorMap = {};
-  const txList = [];
-  let grand = 0, count = 0;
-
-  for (const t of tx) {
-    if (!t.date) continue;
-    if (t.date < df) continue;
-    if (t.date > dt) continue;
-    if (t.amount <= 0) continue;
-
-    const vKey = normalizeVendor(t.name);
-    const tid = mkTxId(t);
-    if (txOv[tid] === "excluded") continue;
-    if (excludedVendors.has(vKey) && !txOv[tid]) continue;
-
-    grand += t.amount; count++;
-    if (!vendorMap[vKey]) vendorMap[vKey] = { vendor: vKey, total: 0, count: 0, first: t.date, last: t.date };
-    vendorMap[vKey].total += t.amount;
-    vendorMap[vKey].count++;
-    if (t.date < vendorMap[vKey].first) vendorMap[vKey].first = t.date;
-    if (t.date > vendorMap[vKey].last) vendorMap[vKey].last = t.date;
-    txList.push({ date: t.date, amount: round(t.amount), name: t.name, mask: t.account_mask });
-  }
-
-  const vendors = Object.values(vendorMap).map(v => ({ ...v, total: round(v.total) })).sort((a, b) => b.total - a.total);
+  const actuals = await _buildActuals(yr);
 
   if (groupBy === "transaction") {
+    const txList = [];
+    let grand = 0, count = 0;
+    for (const v of actuals.vendors) {
+      for (const t of v.txs) {
+        if (t.cat === "excluded") continue;
+        if (!t.date || t.date < df || t.date > dt) continue;
+        grand += t.amount; count++;
+        txList.push({ date: t.date, amount: round(t.amount), name: t.desc, mask: t.mask, vendor: v.name, category: t.cat });
+      }
+    }
     txList.sort((a, b) => b.amount - a.amount);
     return {
       period: { from: df, to: dt },
-      total_expenses: round(grand), tx_count: count, top: txList.slice(0, limit),
+      total_expenses: round(grand), tx_count: count,
+      top: txList.slice(0, limit),
     };
   }
+
+  // group_by vendor (default): aggregate over date window, drop excluded.
+  const vendorMap = {};
+  let grand = 0, count = 0;
+  for (const v of actuals.vendors) {
+    for (const t of v.txs) {
+      if (t.cat === "excluded") continue;
+      if (!t.date || t.date < df || t.date > dt) continue;
+      grand += t.amount; count++;
+      if (!vendorMap[v.key]) vendorMap[v.key] = { vendor: v.name, total: 0, count: 0, first: t.date, last: t.date };
+      const row = vendorMap[v.key];
+      row.total += t.amount; row.count++;
+      if (t.date < row.first) row.first = t.date;
+      if (t.date > row.last)  row.last  = t.date;
+    }
+  }
+  const vendors = Object.values(vendorMap).map(v => ({ ...v, total: round(v.total) })).sort((a, b) => b.total - a.total);
   return {
     period: { from: df, to: dt },
     total_expenses: round(grand), tx_count: count, vendor_count: vendors.length,
     top: vendors.slice(0, limit),
+    note: "Excluded tx removed. Total matches the Dashboard's Expenses figure for this period.",
   };
 }
 
 async function t_get_forecast_vs_actual(input, snap) {
-  const out = [];
-  const cats = await readCategoryKeys();
+  const { _buildActuals } = srv();
   const yr = resolveYear(input);
+  const cats = await readCategoryKeys();
+  const forecast = await readForecast(yr);
+  const actuals = await _buildActuals(yr);
+
+  // Sum tx by category from the Dashboard pipeline.
+  const byCat = {};
+  for (const v of actuals.vendors) {
+    for (const t of v.txs) {
+      byCat[t.cat] = (byCat[t.cat] || 0) + t.amount;
+    }
+  }
+
+  const out = [];
+  let totalForecast = 0, totalActual = 0;
   for (const c of cats) {
     if (c === "excluded") continue;
-    const b = await t_get_category_breakdown({ category: c, year: yr }, snap);
+    const actualVal = round(byCat[c] || 0);
+    const forecastVal = forecast[c] || 0;
+    totalForecast += forecastVal;
+    totalActual += actualVal;
     out.push({
-      category: c, forecast: b.forecast_annual, actual: b.actual,
-      remaining: b.remaining, pct_consumed: b.pct_consumed,
+      category: c, forecast: forecastVal, actual: actualVal,
+      remaining: round(forecastVal - actualVal),
+      pct_consumed: forecastVal ? Math.round((actualVal / forecastVal) * 100) : null,
     });
   }
-  const totalForecast = out.reduce((s, x) => s + x.forecast, 0);
-  const totalActual = out.reduce((s, x) => s + x.actual, 0);
   return {
     year: yr,
     categories: out,
     total_forecast: round(totalForecast),
     total_actual: round(totalActual),
     total_remaining: round(totalForecast - totalActual),
+    excluded_total: round(byCat["excluded"] || 0),
+    note: "total_actual matches the Dashboard's Expenses YTD/year figure (excluded amount is reported separately for context).",
   };
 }
 

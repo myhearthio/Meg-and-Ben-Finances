@@ -138,6 +138,42 @@ function _queueIncomeOverrideUpdate(mutator) {
   return _incomeWriteQueue;
 }
 
+// Strip noise reference numbers from raw bank/Plaid descriptions while
+// preserving real content (names of payees/payers, cities, "TO/FROM",
+// purpose words). Applied at display time only — the raw description stays
+// intact in storage so we can re-derive vendor keys etc.
+//
+// Examples:
+//   "VENMO PAYMENT 1043619564310 : ACH Electronic Debit"   → "VENMO PAYMENT : ACH Electronic Debit"
+//   "ZELLE PAYMENT TO JOHN SMITH 1234567890"                → "ZELLE PAYMENT TO JOHN SMITH"
+//   "CHASE CREDIT CRD AUTOPAY PPD ID: 4760039224"           → "CHASE CREDIT CRD AUTOPAY"
+//   "Online Transfer to chk 7500 transaction#: 22587410876" → "Online Transfer to chk 7500"
+//   "ACH Debit ORIG CO NAME:CENTRAL LOAN ADM ORIG ID:1234567890" → "ACH Debit ORIG CO NAME:CENTRAL LOAN ADM"
+function cleanDescription(raw) {
+  if (!raw) return "";
+  let s = String(raw);
+  // Drop "PPD ID:", "WEB ID:", "CCD ID:" and the digits after them.
+  s = s.replace(/\b(PPD|WEB|CCD|TEL|ARC)\s*ID:\s*\d+/gi, "");
+  // Drop "ORIG ID:1234567890" etc.
+  s = s.replace(/\bORIG\s*ID:\s*\d+/gi, "");
+  // Drop "REF#1234567" / "REF# 1234567" / "Ref:1234567"
+  s = s.replace(/\bREF\s*[:#]\s*\d+/gi, "");
+  // Drop "transaction#: 22587410876" / "trans#:1234567"
+  s = s.replace(/\b(transaction|trans|trace|conf(irmation)?)\s*[#:]\s*\d+/gi, "");
+  // Drop "DESC DATE:240130" style.
+  s = s.replace(/\bDESC\s*DATE:\s*\d+/gi, "");
+  // Drop standalone long digit blobs (7+ chars). These are ACH trace IDs,
+  // Venmo payment IDs, Plaid web IDs, check numbers in the middle of text.
+  // Use word-boundary so it doesn't eat dollar amounts (those have decimals).
+  s = s.replace(/\b\d{7,}\b/g, "");
+  // Collapse leftover punctuation islands like " :  " or "  -  ".
+  s = s.replace(/\s*:\s*:\s*/g, " : ");
+  s = s.replace(/\s+/g, " ").trim();
+  // Trim a trailing colon/comma/dash that's now dangling.
+  s = s.replace(/[\s:,\-]+$/, "");
+  return s;
+}
+
 function normalizeVendor(raw) {
   if (!raw) return "UNKNOWN";
   let s = String(raw).toUpperCase().trim();
@@ -606,7 +642,7 @@ async function _buildActuals(yearOverride) {
     const pfcPrimary = pfc ? String(pfc.primary || "").toUpperCase() : "";
     const pfcDetailed = pfc ? String(pfc.detailed || "").toUpperCase() : "";
     const plaidCats = Array.isArray(t.category) ? t.category.map(c => String(c).toUpperCase()) : [];
-    txList.push({ id: txId, date: (t.date || "").slice(0, 10), desc: rawDesc, amount: Number(t.amount), vendorKey, vendorNorm: normName, mask: t.account_mask || "", pfcPrimary, pfcDetailed, plaidCats });
+    txList.push({ id: txId, date: (t.date || "").slice(0, 10), desc: cleanDescription(rawDesc), amount: Number(t.amount), vendorKey, vendorNorm: normName, mask: t.account_mask || "", pfcPrimary, pfcDetailed, plaidCats });
     txIdx++;
   }
   const byVendor = {};
@@ -706,7 +742,7 @@ async function _buildIncome(yearOverride) {
     const txId = (t.date || "") + "|" + Number(t.amount) + "|" + rawDesc.slice(0, 60);
     // For income, "amount" should display as a positive deposit value.
     const amt = -Number(t.amount);
-    txList.push({ id: txId, date: (t.date || "").slice(0, 10), desc: rawDesc, amount: amt, vendorKey, vendorNorm: normName, mask: t.account_mask || "" });
+    txList.push({ id: txId, date: (t.date || "").slice(0, 10), desc: cleanDescription(rawDesc), amount: amt, vendorKey, vendorNorm: normName, mask: t.account_mask || "" });
   }
 
   const byVendor = {};
@@ -1079,3 +1115,13 @@ const PORT = process.env.PORT || 8787;
     getSnapshot(true).then(() => console.log("Snapshot ready.")).catch(e => console.log("Boot snapshot err:", e.message));
   });
 })();
+
+// Exported for tools.js — Harold reconciles to the Dashboard by calling
+// these same helpers (lazy-required to avoid circular import at load time).
+module.exports = {
+  _buildActuals,
+  _buildIncome,
+  getSnapshot,
+  normalizeVendor,
+  cleanDescription,
+};

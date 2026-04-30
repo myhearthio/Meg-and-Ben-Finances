@@ -57,9 +57,26 @@ If the same thing breaks twice, **stop and diagnose the architecture**, don't ju
 - When the user asks "is this right?" — actually check (run a query, eval, screenshot). Never speculate.
 - If a fix is uncertain, say so plainly. Don't perform confidence.
 - "You are dumb" means stop and rethink, not apologize harder.
+- When the user says **"do not code"** or **"do you understand?"** — STOP. Confirm understanding in plain English. Do not touch files. Wait for explicit go-ahead.
 
 ### 5. When in doubt, read the file
 Don't infer from filename. Open it. Especially `server.js`, `snapshot.js`, and the JSX page files — they have inline comments explaining the locked formulas.
+
+### 6. Harold reconciles to the Dashboard. Always.
+- The Dashboard is the single source of truth for every number Harold quotes — Income, Expenses, Net Saved, category totals, vendor totals, ranking, all of it.
+- Harold's tools must pull from the SAME `getSnapshot()` / `_buildActuals()` / `_buildIncome()` pipeline that renders the Dashboard. Same exclusions, same overrides, same totals.
+- Never let Harold compute parallel math. If Harold's tool answer differs from what the Dashboard shows for the same year, the tool is wrong — fix the tool, not the answer.
+- Ranking always uses `get_top_expenses` (which applies exclusions). NEVER rank from `find_transactions` raw.
+- When a user asks about a prior year, every tool must take the year through cleanly and produce numbers that would match the Dashboard if the user switched the Dashboard to that year.
+
+### 7. Strip noise IDs from descriptions, keep names
+- Bank/Plaid descriptions are full of garbage reference numbers. Strip them at display time everywhere a description is shown (Approval Queue, vendor rows, tx rows, Income tab, anything Harold echoes back).
+- Strip: long random digit runs (7+ chars), "PPD ID:", "WEB ID:", "REF#", ACH trace IDs, check serial numbers.
+- Keep: real names of people/businesses, cities/states, "TO/FROM", purpose words, descriptive text.
+- Examples:
+  - "VENMO PAYMENT 1043619564310 : ACH Electronic Debit" → "VENMO PAYMENT : ACH Electronic Debit"
+  - "ZELLE PAYMENT TO JOHN SMITH 1234567890" → "ZELLE PAYMENT TO JOHN SMITH"
+  - "CHASE CREDIT CRD AUTOPAY PPD ID: 4760039224" → "CHASE CREDIT CRD AUTOPAY"
 
 ## Key product concepts
 
@@ -87,6 +104,15 @@ When you change something material, append a dated note at the bottom.
 ---
 
 ## Session notes
+
+### 2026-04-30 — Multi-year support + Harold-Dashboard reconciliation rule
+- Added 24-month Plaid pull (was YTD-only). All transaction tools (`get_top_expenses`, `find_transactions`, `get_vendor_total`, `get_category_breakdown`, `get_forecast_vs_actual`) now accept optional `year` param. System prompt updated.
+- BUG that triggered the rule: Harold quoted $1,141,020 as 2025 total expenses. User said wrong, told me to use the Dashboard number. I'd been reconciling tools in a silo against my own math, not against what the user actually sees on the Dashboard.
+- New CLAUDE.md rules added (sections 6 and 7 above):
+  - **Harold reconciles to Dashboard, always.** Same snapshot pipeline (`getSnapshot` → `_buildActuals` / `_buildIncome`) that renders the Dashboard must back every Harold tool answer. No parallel math.
+  - **Strip noise IDs from descriptions, keep names.** "VENMO PAYMENT 1043619564310 : ACH Electronic Debit" → "VENMO PAYMENT : ACH Electronic Debit". Apply everywhere descriptions are shown — Approval Queue, vendor rows, tx rows, Income, Harold echoes. Keep real names (Zelle to John Smith, Wire to Megan Fitzpatrick), strip random ID/reference digits.
+- Also reinforced: when user says "do not code" or "do you understand?" — confirm in English first, never touch files until explicit go-ahead.
+- TODO for next coding pass: (a) wire Harold tools into `_buildActuals`/`_buildIncome` per-year so totals match Dashboard by construction; (b) write a `cleanDescription(rawDesc)` helper and apply it at display layer everywhere, not at storage.
 
 ### 2026-04-30 — Connor → Harold rebuild
 - Renamed the chat persona from Connor to Harold. Harold is a 64yo composite-character family CFO modeled on William Bernstein (worldview), Bill Bengen (math), and the patrician Bessemer Trust archetype (voice). His one job: tell Ben & Megan when they can actually retire.

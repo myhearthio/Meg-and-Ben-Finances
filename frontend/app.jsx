@@ -1308,11 +1308,10 @@ function IncomeView({ snap }) {
 
           {pendingTxs.length > 0 && (
             <IncomeApprovalCard pendingTxs={pendingTxs}
-              onApprove={async (txId, cat, vendorKey) => {
-                // "Approve" = save the vendor cat (so future deposits auto-fill).
-                await post({ vendor_key: vendorKey, category: cat });
+              onApprove={async (txId, cat) => {
+                // Strict: approve sets per-tx override only. Vendor cat is suggestion.
+                await setTxCat(txId, cat);
               }}
-              onApproveTx={async (txId, cat) => { await setTxCat(txId, cat); }}
               onRenameVendor={renameVendor}
               onRenameTx={renameTx}
             />
@@ -1484,21 +1483,30 @@ function IncomeApprovalCard({ pendingTxs, onApprove, onApproveTx, onRenameVendor
   const totalPages = Math.max(1, Math.ceil(pendingTxs.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages - 1);
   const pageTxs = pendingTxs.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+
+  // Pre-fill from suggestion (vendor cat) when a tx first appears on the page.
+  const pageIdsKey = pageTxs.map(t => t.id).join("|");
+  useEffect(() => {
+    setRowCats(prev => {
+      const next = { ...prev };
+      let changed = false;
+      for (const t of pageTxs) {
+        if (!(t.id in next)) { next[t.id] = t.suggestion || ""; changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  }, [pageIdsKey]);
+
   const pageReady = pageTxs.filter(tx => rowCats[tx.id]);
   const setCat = (id, cat) => setRowCats(rc => ({ ...rc, [id]: cat }));
 
   const approveAllShown = async () => {
     setBulkBusy(true);
     try {
-      // Group by vendor to minimize writes.
-      const byVendor = {};
+      // Strict mode: approve each tx individually with per-tx override.
       for (const tx of pageReady) {
         const cat = rowCats[tx.id];
-        if (!byVendor[tx.vendorKey]) byVendor[tx.vendorKey] = { cat, count: 0 };
-        byVendor[tx.vendorKey].count++;
-      }
-      for (const [vk, { cat }] of Object.entries(byVendor)) {
-        await onApprove(null, cat, vk);
+        await onApprove(tx.id, cat);
       }
       setRowCats({});
     } finally { setBulkBusy(false); }

@@ -687,7 +687,9 @@ async function _buildIncome(yearOverride) {
     if (!v) v = byVendor[t.vendorKey] = { key: t.vendorKey, name: nameOv[t.vendorKey] || t.vendorNorm, rawSample: t.desc, amount: 0, count: 0, cat: vOverride || "excluded", vendorSaved: !!vOverride, txs: [] };
     v.amount += t.amount;
     v.count += 1;
-    const userSet = !!(txCat || vOverride);
+    // Income is strict: every deposit must be explicitly approved per-tx.
+    // Vendor overrides are just suggestions/pre-fills — they never mark a tx as approved.
+    const userSet = !!txCat;
     const suggestion = vOverride || "excluded";
     v.txs.push({ id: t.id, date: t.date, desc: txDescOv[t.id] || t.desc, amount: t.amount, cat, userSet, suggestion });
   }

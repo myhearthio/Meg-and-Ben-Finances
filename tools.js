@@ -1,12 +1,12 @@
-// tools.js — server-side tool implementations Connor can invoke via Claude tool-calling.
+// tools.js — server-side tool implementations Harold can invoke via Claude tool-calling.
 // Each tool takes (input, snapshot) and returns a plain JSON-serializable object.
-// Numbers returned here are the ONLY numbers Connor is allowed to quote back.
+// Numbers returned here are the ONLY numbers Harold is allowed to quote back.
 //
 // All persistent state reads from Postgres via data.js. NEVER read/write disk.
 const db = require("./data");
 
 // Categories are now managed via /api/categories (kv-stored). We read fresh
-// each time so Connor sees newly-added categories without a server restart.
+// each time so Harold sees newly-added categories without a server restart.
 const CATEGORIES_KEY = "family-categories";
 async function readCategoryKeys() {
   const list = await db.kvGet(CATEGORIES_KEY, null);
@@ -149,8 +149,8 @@ async function toolDefs() {
       input_schema: { type: "object", properties: {} },
     },
     {
-      name: "write_to_connor_md",
-      description: "Append one line to CONNOR.md. ONLY call when the user explicitly says 'write to connor.md' or 'remember this'.",
+      name: "write_to_harold_md",
+      description: "Append one line to HAROLD.md. ONLY call when the user explicitly says 'write to harold.md' or 'remember this'.",
       input_schema: {
         type: "object",
         required: ["section", "entry"],
@@ -159,6 +159,11 @@ async function toolDefs() {
           entry: { type: "string" },
         },
       },
+    },
+    {
+      name: "get_investments",
+      description: "Full investment position list — Rockefeller brokerage, Megan's 401k, individual real estate property equity, LLY stock, 529s, treasuries, etc. Returns each row with name and current value, plus the grand total. Use whenever Ben or Megan asks about the portfolio, net worth composition, real estate equity, or anything investment-related.",
+      input_schema: { type: "object", properties: {} },
     },
   ];
 }
@@ -354,10 +359,22 @@ async function t_read_memory(input, snap) {
   return await readMemory();
 }
 
-async function t_write_to_connor_md(input, snap) {
-  const { appendToConnorMd } = require("./chat");
-  await appendToConnorMd(input.section, input.entry);
+async function t_write_to_harold_md(input, snap) {
+  const { appendToHaroldMd } = require("./chat");
+  await appendToHaroldMd(input.section, input.entry);
   return { ok: true, section: input.section, entry: input.entry };
+}
+
+async function t_get_investments(input, snap) {
+  const list = (await db.kvGet("family-investments", [])) || [];
+  const rows = (Array.isArray(list) ? list : []).map(x => ({
+    name: x.name,
+    value: Math.round(Number(x.value) || 0),
+    note: x.note || "",
+    updated_at: x.updated_at,
+  })).sort((a, b) => b.value - a.value);
+  const total = rows.reduce((s, r) => s + r.value, 0);
+  return { count: rows.length, total, investments: rows };
 }
 
 const handlers = {
@@ -369,7 +386,10 @@ const handlers = {
   navigate: t_navigate,
   save_memory: t_save_memory,
   read_memory: t_read_memory,
-  write_to_connor_md: t_write_to_connor_md,
+  write_to_harold_md: t_write_to_harold_md,
+  // legacy alias — old conversations may still emit the old name
+  write_to_connor_md: t_write_to_harold_md,
+  get_investments: t_get_investments,
 };
 
 async function runTool(name, input, snap) {

@@ -1083,7 +1083,7 @@ function DraggablePill({ onOpen }) {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
-    >💬 Connor</button>
+    >💼 Harold</button>
   );
 }
 
@@ -1096,7 +1096,7 @@ function FloatingChat() {
   return (
     <div className="fchat-panel">
       <div className="fchat-head">
-        <div className="fchat-title">Connor</div>
+        <div className="fchat-title">Harold</div>
         <div className="fchat-actions">
           <button className="fchat-btn" onClick={() => setOpen(false)}>—</button>
         </div>
@@ -1113,7 +1113,7 @@ function ChatPanel() {
   const scrollRef = useRef(null);
 
   useEffect(() => {
-    fetch("/api/connor/history").then(r => r.json()).then(j => {
+    fetch("/api/harold/history").then(r => r.json()).then(j => {
       if (j.messages) setMessages(j.messages);
     }).catch(() => {});
   }, []);
@@ -1154,8 +1154,9 @@ function ChatPanel() {
       <div className="chat-messages" ref={scrollRef}>
         {messages.length === 0 && (
           <div style={{ color: "#888", fontSize: 12, textAlign: "center", padding: 24 }}>
-            Hi. I'm Connor — your family CFO.<br/>
-            Ask me anything about cash, spending, vendors, or budgets.
+            Hello. Harold here — your family CFO.<br/>
+            Bessemer Trust, then a small family office. Now you.<br/>
+            Ask me anything. Spending, the portfolio, REPS, when you can retire.
           </div>
         )}
         {messages.map((m, i) => (
@@ -1173,7 +1174,7 @@ function ChatPanel() {
         {busy && <div className="msg assistant"><div className="msg-bubble">…</div></div>}
       </div>
       <form className="chat-input" onSubmit={e => { e.preventDefault(); send(); }}>
-        <input value={input} onChange={e => setInput(e.target.value)} placeholder="Ask Connor anything…" />
+        <input value={input} onChange={e => setInput(e.target.value)} placeholder="Ask Harold…" />
         <button type="submit" disabled={busy}>Send</button>
       </form>
     </div>

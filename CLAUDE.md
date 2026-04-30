@@ -22,13 +22,13 @@ React JSX (Babel, no build step) → Express API → **Postgres** + Plaid + Anth
 - `plaid.js` — Plaid Link + transaction sync
 - `csv.js` — Chase CSV parsing/upload
 - `snapshot.js` — single source of truth for every number (KPIs, totals)
-- `chat.js` + `tools.js` — Connor (Claude Sonnet 4.5 with tool-calling)
+- `chat.js` + `tools.js` — Harold (Claude Sonnet 4.5 with tool-calling). Old name was Connor; renamed 2026-04-30. Persona: Bessemer Trust patrician, Bernstein/Bengen-fluent, REPS/cost-seg-fluent, retirement-readiness focus.
 - `data.js` — DB layer (Postgres)
 
 **Frontend (`frontend/` dir, served as static by same Express):**
 - `index.html` — shell, loads React + Babel + JSX files
 - `app.jsx` — root, routing, top bar
-- `dashboard.jsx`, `budget.jsx`, `accounts.jsx`, `connor.jsx` — pages
+- `dashboard.jsx`, `budget.jsx`, `accounts.jsx`, `connor.jsx` — unused legacy files at project root (the live UI is `frontend/app.jsx` only)
 - `sidebar.jsx`, `ui.jsx`, `tweaks-panel.jsx` — shared
 - `styles.css` — design tokens
 
@@ -87,6 +87,83 @@ When you change something material, append a dated note at the bottom.
 ---
 
 ## Session notes
+
+### 2026-04-30 — Connor → Harold rebuild
+- Renamed the chat persona from Connor to Harold. Harold is a 64yo composite-character family CFO modeled on William Bernstein (worldview), Bill Bengen (math), and the patrician Bessemer Trust archetype (voice). His one job: tell Ben & Megan when they can actually retire.
+- Persona baked into chat.js system prompt: signs off "Yours, H.", calls Megan "Megan", says "I'd advise against that" / "now we're cooking", standing line "the four scariest words in investing are 'this time it's different'."
+- Frameworks baked in: Bengen-Bernstein synthesis (LMP vs Risk Portfolio, 4.7-5.5% SWR range), sequence-of-returns + inflation as boss enemies, real estate tax stack (REPS rules, cost seg, 3.8% NIIT safe harbor under §1.1411-4(g)(7), STR loophole, DST limitations), TIPS ladder for LMP.
+- Family context baked in: Megan = W-2 attorney at Eli Lilly (cannot qualify REPS), Ben = REPS spouse, 6 Chicago rentals (Logan/Francisco/Armitage/Milwaukee/Wabansia/Albany), Rockefeller brokerage $2.6M, Megan 401k $664k, LLY concentration $147k.
+- New tool: `get_investments` returns the live position list from kv `family-investments` (sum: $5.32M as of writing). Lets Harold answer portfolio questions without making things up.
+- Storage migration: `CONNOR.md` (memo store) auto-migrates to `HAROLD.md` on first read (header swap, body preserved). `connor_memory` kv key kept as-is so old facts carry forward. New API: `/api/harold/{md,history,history/clear}` — old `/api/connor/*` routes still work as aliases. Frontend `frontend/app.jsx` switched to `/api/harold/history`.
+- Tool aliases: `write_to_harold_md` is the new tool name; `write_to_connor_md` kept as alias in handlers in case mid-flight conversations reference the old name.
+- Files touched: `chat.js` (rewritten), `tools.js` (added get_investments + write_to_harold_md), `server.js` (route aliases), `frontend/app.jsx` (UI labels + history endpoint).
+
+### 2026-04-30 — Personal-accounts allow-list (CRITICAL)
+- User re-linked Plaid with **all** their accounts including business (BLT 7500, B. LALEZ 5706 cc, etc). They explicitly said "ignore the new accounts" — Family CFO is for personal finance only. **Business accounts must NEVER appear** in Income, Expenses, KPIs, the Approval Queue, or the sidebar.
+- Implementation: hardcoded `ALLOWED_MASKS = Set("0485","5538","6002","4547")` in `gatherSnapshot()` in server.js, applied **before** snapshot is built. Filters both `accounts` and `plaidTx`. Also filters `csv.listMasks()` loop so phased-out CSVs (5814) don't sneak in.
+- Personal accounts:
+  - **0485** Ben checking (Plaid)
+  - **5538** Ben credit card (Plaid)
+  - **6002** Megan checking (CSV)
+  - **4547** Megan credit card (CSV)
+- Excluded:
+  - **5814** — duplicate of 5538, phased out
+  - **5706** — B. LALEZ credit card, ignore
+  - **7500** — BLT business checking
+- If user adds new personal accounts in future, edit the `ALLOWED_MASKS` set in `server.js` (search for "Personal-accounts allow-list").
+- Deploy: commit `f4157a7`.
+
+### 2026-04-30 — Income strict mode
+- Earlier income behavior auto-categorized any deposit whose vendor was previously approved (vendorSaved → tx.userSet=true → never appeared in queue). User wanted every inbound deposit to require explicit per-tx approval, regardless of vendor history.
+- Change in `_buildIncome` (server.js): `userSet = !!txCat` (was `!!(txCat || vOverride)`). Vendor cat is now suggestion-only — pre-fills the dropdown but never marks the tx approved.
+- Frontend (`IncomeApprovalCard`): "Approve" button writes a per-tx override (`setTxCat`), not a vendor override. Bulk approve does the same per-tx for each row. Vendor category in the regular vendor row is still settable separately if user wants future suggestions.
+- Pre-fill: added `useEffect` on pageIdsKey that copies `tx.suggestion` into `rowCats` when a tx first appears. So vendor cat shows up pre-selected but user must click Approve.
+- This is "stricter than expenses" — expenses still auto-categorize from vendor. Income alone requires per-tx clicks. Reason: deposits include real income, internal transfers, refunds, wires from family members, etc — semantically different per tx even within the same vendor.
+- Deploy: commit `e6efc79` (strict mode), then `f4157a7` (allow-list — supersedes the wrong "180 pending" number; real count after filtering business is much smaller).
+
+### 2026-04-29 — Income tab (deposits)
+- New top-level tab between Budget and Accounts. Mirrors the expense vendor/tx model with a fixed three-bucket category system: **Megan / Ben / Excluded**. No forecast layer for income (yet) — just a categorization view.
+- Backend:
+  - New kv key `family-income-overrides` (separate namespace from expense `family-overrides`). Same shape: `{ vendorKey: cat, __tx: {}, __names: {}, __tx_desc: {} }`.
+  - `_buildIncome(year)` mirrors `_buildActuals` but filters to depository + amount<0 (Plaid's deposit convention, sign-flipped to display positive).
+  - **Default for unknown deposit vendors = "excluded"** (not "other" like expenses). Reason: deposits are noisier than charges — wires, transfers, refunds, Zelle from yourself all show up as "income" in raw Plaid. Defaulting unknowns to excluded means the Income KPI starts at $0 and only grows when the user explicitly tags a vendor as Megan or Ben.
+  - Income excludes are merged into the same `excludedTxIds` set passed to `buildSnapshot` (in `gatherSnapshot`), so the existing top-line Income KPI on the Dashboard stays accurate. Income tx and expense tx never collide on tx id (different sign), so one shared set is fine.
+  - New endpoints: `GET /api/income?year=YYYY` and `POST /api/income` (same payload shape as `/api/actuals` — vendor_key+category, tx_id+category, vendor rename, tx desc).
+  - Vendor recategorization clears stale per-tx overrides for that vendor (same logic we added to expenses earlier today).
+- Frontend (`frontend/app.jsx`):
+  - New `Income` tab in TopBar.
+  - `IncomeView`: KPI row (Total / Megan / Ben / Excluded) + IncomeApprovalCard (paginated, bulk-approve same as expenses) + three sections (Megan / Ben / Excluded) with vendor rows that expand into tx rows. Vendor and tx category dropdowns are limited to `INCOME_CATS = [megan, ben, excluded]`.
+  - `IncomeApprovalCard` + `IncomeApprovalRow` components — copy of the expense approval queue UI but limited to the three income categories.
+- Verified live: 22 deposit vendors found in 2026 YTD, all defaulting to Excluded. ELI LILLY PAYROLL ($187k) is Megan's, INCOMING WIRE FROM BENYAMIN LALEZ ($50k) is Ben's, etc. — user tags them via the dropdown.
+- Deploy: commit `320f5fb`. `/api/version` confirmed.
+
+### 2026-04-29 — Vendor recategorization clears stale tx overrides
+- Bug: User moved ZELLE: VAL from Excluded → Housing via the vendor dropdown. The vendor override updated, but the 15 individual transactions stayed in Excluded because each one had a per-tx override (`__tx[txId] = "excluded"`) from a prior bulk action. Per-tx overrides win over vendor overrides (precedence layer 1 vs layer 2), so the UI showed the new vendor category but the totals never moved.
+- Fix: When a vendor category changes via `POST /api/vendor-overrides`, server now finds all tx for that `vendorKey` and **deletes** their per-tx overrides in the same transaction. The vendor-level setting becomes the single source of truth for that vendor going forward.
+- Implementation in `server.js`: after the `kvSet('vendor-overrides', ...)`, query tx by normalized vendor and run `kvSet('tx-overrides', ...)` with those keys removed.
+- This is the right behavior: setting a vendor's category is an explicit "all tx from this vendor are X" statement that should override any prior one-off picks. If the user wants per-tx variation later, they can still set individual overrides — those will then win again until the vendor is touched.
+- Lesson: when you have layered overrides, any "broader" layer write should clear conflicting "narrower" layer entries, not just sit underneath them. Otherwise the UI lies.
+
+### 2026-04-28 — Plaid is LIVE in production ✅
+- Switched from Sandbox to Production. User has Plaid Production access on the **"Ben Lalez Team"** account (NOT the personal "Benyamin Lalez" account — different Client IDs).
+- Render env now: `PLAID_ENV=production` + Team account's Client ID + Production secret.
+- Plaid changed their tiers: there is no longer a "Development" environment. It's Sandbox or Production. Production now requires an approval flow (form + security questionnaire). User had it pre-approved on the Team account from another project.
+- Real data flowing: Benny Checking ($99k) + Credit Card 5538 connected. 870 charges + 51 deposits parsed YTD.
+- Caveat: Plaid Items can only be linked to ONE app at a time per Team. User had to unlink business accounts from another app (`blt-cfo`) to bring them here. They can link them back later if needed; pick which app owns each Item.
+- Allowed redirect URIs on Plaid dashboard must include `https://meg-and-ben-finance.onrender.com/oauth-return`.
+- ⚠️ User leaked Production secret in chat during setup. They should rotate it via Plaid dashboard → Keys → Rotate. (Logged here so we don't forget.)
+
+### 2026-04-28 — Settings tab + dynamic categories
+- Categories were hardcoded in `frontend/app.jsx` (`FAMILY_CATS`) and `tools.js`. Made them kv-stored under `family-categories` so the user can rename labels and add new ones at runtime.
+- Added `/api/categories` GET/POST in server.js (with parent-integrity validation + dup-key check).
+- Frontend: `FAMILY_CATS` is still a module-level array but mutated in-place after fetch; a tiny pub-sub (`useFamilyCats` hook) re-renders subscribers when it changes. Components that map over the list (`MonthlyCharts`, `BudgetView`, `ApprovalRow`) now call the hook.
+- Added `SettingsView` component with rename/add UI. Deletion deliberately not exposed (would orphan tx overrides).
+- tools.js: `toolDefs()` is now async and reads kv each call so Connor sees newly-added categories without restart.
+
+### 2026-04-28 — tools.js Postgres fix
+- Found a leftover from yesterday's migration: `tools.js` (Connor's tool implementations) was still using `readJson(OVERRIDES_PATH)` and writing memory to disk. That meant on Render's ephemeral filesystem, Connor was reading EMPTY overrides — every tool call ignored vendor categorizations and Connor was quoting wrong numbers.
+- Replaced with `db.kvGet/kvSet`. Also added `kids_activities` and `education` to the FAMILY_CATS list in tools.js (frontend had them, tools.js didn't).
+- Lesson: when migrating storage, grep for ALL `readJson`/`fs.readFile` calls, not just the obvious ones in server.js.
 
 ### 2026-04-28 — Postgres migration
 - Diagnosis: data kept disappearing because backend wrote JSON files to Render's ephemeral disk; every restart wiped overrides.

@@ -3,7 +3,7 @@
 //
 // Endpoints:
 //   GET  /api/snapshot           — cached 60s, full dashboard state
-//   POST /api/chat               — Connor proxy
+//   POST /api/chat               — Harold proxy
 //   POST /api/plaid/link         — create link token
 //   POST /api/plaid/exchange     — exchange public token
 //   GET  /api/plaid/status       — { connected: bool }
@@ -12,9 +12,10 @@
 //   GET/POST /api/forecast       — annual forecast amounts per category
 //   GET/POST /api/actuals        — vendor + per-tx category overrides
 //   GET  /api/version            — running commit SHA
-//   GET  /api/connor/md
-//   GET  /api/connor/history
-//   POST /api/connor/history/clear
+//   GET  /api/harold/md
+//   GET  /api/harold/history
+//   POST /api/harold/history/clear
+//   (legacy aliases /api/connor/* still work)
 //   GET  /api/debug/find
 //   GET  /oauth-return
 
@@ -26,7 +27,7 @@ const db = require("./data");
 const plaid = require("./plaid");
 const csv = require("./csv");
 const { buildSnapshot } = require("./snapshot");
-const { chat, readConnorMd, readHistory, writeHistory } = require("./chat");
+const { chat, readHaroldMd, readHistory, writeHistory } = require("./chat");
 
 const app = express();
 const BOOT_TIME = new Date().toISOString();
@@ -333,8 +334,22 @@ app.post("/api/chat", async (req, res) => {
   } catch (e) { console.log("chat err:", e); res.status(500).json({ error: e.message }); }
 });
 
+app.get("/api/harold/md", async (req, res) => {
+  try { res.type("text/plain").send(await readHaroldMd()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get("/api/harold/history", async (req, res) => {
+  try { res.json({ messages: await readHistory() }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post("/api/harold/history/clear", async (req, res) => {
+  try { await writeHistory([]); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Legacy aliases — keep so old clients / cached assets don't break.
 app.get("/api/connor/md", async (req, res) => {
-  try { res.type("text/plain").send(await readConnorMd()); }
+  try { res.type("text/plain").send(await readHaroldMd()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get("/api/connor/history", async (req, res) => {

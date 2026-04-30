@@ -1195,6 +1195,10 @@ function IncomeView({ snap }) {
   const [data, setData] = useState({ vendors: [], byCategory: {}, total: 0 });
   const [forecast, setForecast] = useState({});
   const [loading, setLoading] = useState(true);
+  const [firstLoaded, setFirstLoaded] = useState(false);
+  // Optimistic state: tx IDs the user has just approved locally (before server confirms).
+  // Maps txId -> category. Merged into the vendor/tx tree so the UI updates instantly.
+  const [optimisticTx, setOptimisticTx] = useState({});
   const [expandedVendors, setExpandedVendors] = useState({});
   const [collapsedSections, setCollapsedSections] = useState(() => {
     try { return JSON.parse(localStorage.getItem("mb_income_collapsed") || "{\"excluded\":true}"); }
@@ -1205,8 +1209,8 @@ function IncomeView({ snap }) {
 
   useEffect(() => { localStorage.setItem("mb_year", year); }, [year]);
 
-  const reload = useCallback(async () => {
-    setLoading(true);
+  const reload = useCallback(async ({ background = false } = {}) => {
+    if (!background) setLoading(true);
     try {
       const [r1, r2] = await Promise.all([
         fetch("/api/income?year=" + year),
@@ -1216,7 +1220,22 @@ function IncomeView({ snap }) {
       const f = await r2.json();
       setData(j || { vendors: [], byCategory: {}, total: 0 });
       setForecast(f || {});
-    } finally { setLoading(false); }
+      setFirstLoaded(true);
+      // Clear optimistic state once real data has caught up — anything still
+      // pending in optimisticTx whose tx hasn't yet shown userSet=true on the
+      // server gets reapplied on next render via the merged view.
+      setOptimisticTx(prev => {
+        const next = {};
+        const serverApproved = new Set();
+        for (const v of (j?.vendors || [])) for (const t of (v.txs || [])) {
+          if (t.userSet) serverApproved.add(t.id);
+        }
+        for (const [id, cat] of Object.entries(prev)) {
+          if (!serverApproved.has(id)) next[id] = cat; // server hasn't caught up yet
+        }
+        return next;
+      });
+    } finally { if (!background) setLoading(false); }
   }, [year]);
 
   useEffect(() => { reload(); }, [reload]);
@@ -1230,13 +1249,53 @@ function IncomeView({ snap }) {
     });
   };
 
+  // Single-op write: fire request, then revalidate in background (no loading flash).
   const post = async (body) => {
     await fetch("/api/income", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    await reload();
+    await reload({ background: true });
+  };
+
+  // Batch write: send N ops in one round-trip, then one background revalidate.
+  const postBatch = async (ops) => {
+    if (!ops || ops.length === 0) return;
+    await fetch("/api/income/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ops }),
+    });
+    await reload({ background: true });
+  };
+
+  // Optimistic approve: stamp tx as userSet locally immediately, fire request in
+  // background. Used by the queue so it never flashes "Loading…".
+  const approveTxOptimistic = (txId, category) => {
+    setOptimisticTx(prev => ({ ...prev, [txId]: category }));
+    // Fire the network call but don't await UI on it.
+    fetch("/api/income", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tx_id: txId, category }),
+    }).then(() => reload({ background: true })).catch(() => {});
+  };
+
+  // Optimistic batch approve: same idea for "Approve N on this page".
+  const approveBatchOptimistic = (rows) => {
+    if (!rows || rows.length === 0) return;
+    setOptimisticTx(prev => {
+      const next = { ...prev };
+      for (const r of rows) next[r.tx_id] = r.category;
+      return next;
+    });
+    const ops = rows.map(r => ({ tx_id: r.tx_id, category: r.category }));
+    fetch("/api/income/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ops }),
+    }).then(() => reload({ background: true })).catch(() => {});
   };
 
   const setVendorCat = (vendor_key, category) => post({ vendor_key, category });
@@ -1249,16 +1308,33 @@ function IncomeView({ snap }) {
   const nextYear = Number(snap.year) + 1;
   const years = [String(snap.year - 2), String(snap.year - 1), String(snap.year), String(nextYear)];
 
+  // Apply optimistic tx-level approvals on top of server data so the UI reflects
+  // pending changes instantly. Each optimistic entry stamps `userSet=true` and
+  // overrides the tx's category, which in turn fixes the queue, KPIs, and
+  // vendor sections all at once.
+  const mergedVendors = (data.vendors || []).map(v => ({
+    ...v,
+    txs: (v.txs || []).map(tx => {
+      const ov = optimisticTx[tx.id];
+      if (!ov) return tx;
+      return { ...tx, cat: ov, userSet: true };
+    }),
+  }));
+
   // Pending = vendors that haven't been categorized yet (default = excluded but not vendorSaved).
   const pendingTxs = [];
-  for (const v of (data.vendors || [])) {
+  for (const v of mergedVendors) {
     for (const tx of (v.txs || [])) {
       if (!tx.userSet) pendingTxs.push({ ...tx, vendorKey: v.key, vendorName: v.name });
     }
   }
   pendingTxs.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 
-  const byCat = data.byCategory || {};
+  // Recompute KPIs from merged tx so optimistic changes flow into the top numbers.
+  const byCat = { megan: 0, ben: 0, excluded: 0 };
+  for (const v of mergedVendors) for (const tx of (v.txs || [])) {
+    byCat[tx.cat] = (byCat[tx.cat] || 0) + tx.amount;
+  }
   const meganTotal = byCat.megan || 0;
   const benTotal = byCat.ben || 0;
   const excludedTotal = byCat.excluded || 0;
@@ -1266,7 +1342,7 @@ function IncomeView({ snap }) {
 
   // Group vendors by their resolved category (uses tx-level cats since user can split a vendor).
   const vendorsByCat = { megan: [], ben: [], excluded: [] };
-  for (const v of (data.vendors || [])) {
+  for (const v of mergedVendors) {
     const sumByCat = {};
     for (const tx of (v.txs || [])) sumByCat[tx.cat] = (sumByCat[tx.cat] || 0) + tx.amount;
     for (const [cat, amt] of Object.entries(sumByCat)) {
@@ -1287,9 +1363,9 @@ function IncomeView({ snap }) {
         ))}
       </div>
 
-      {loading && <div style={{ padding: 24, color: "#888" }}>Loading…</div>}
+      {!firstLoaded && <div style={{ padding: 24, color: "#888" }}>Loading…</div>}
 
-      {!loading && (
+      {firstLoaded && (
         <>
           <div className="kpi-row" style={{ marginTop: 16 }}>
             <div className="kpi"><div className="kpi-label">Total Income</div><div className="kpi-value">{fmt(incomeTotal)}</div><div className="kpi-sub">Megan + Ben</div></div>
@@ -1308,9 +1384,13 @@ function IncomeView({ snap }) {
 
           {pendingTxs.length > 0 && (
             <IncomeApprovalCard pendingTxs={pendingTxs}
-              onApprove={async (txId, cat) => {
-                // Strict: approve sets per-tx override only. Vendor cat is suggestion.
-                await setTxCat(txId, cat);
+              onApprove={(txId, cat) => {
+                // Optimistic: stamp locally + fire request, no UI flash.
+                approveTxOptimistic(txId, cat);
+              }}
+              onApproveBatch={(rows) => {
+                // One request for the whole page.
+                approveBatchOptimistic(rows);
               }}
               onRenameVendor={renameVendor}
               onRenameTx={renameTx}
@@ -1472,8 +1552,7 @@ function IncomeForecastCard({ year, meganActual, benActual, forecast, onSave }) 
   );
 }
 
-function IncomeApprovalCard({ pendingTxs, onApprove, onApproveTx, onRenameVendor, onRenameTx }) {
-  const [bulkBusy, setBulkBusy] = useState(false);
+function IncomeApprovalCard({ pendingTxs, onApprove, onApproveBatch, onRenameVendor, onRenameTx }) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("mb_income_approval_collapsed") === "1");
   const [page, setPage] = useState(0);
   const [rowCats, setRowCats] = useState({});
@@ -1500,16 +1579,11 @@ function IncomeApprovalCard({ pendingTxs, onApprove, onApproveTx, onRenameVendor
   const pageReady = pageTxs.filter(tx => rowCats[tx.id]);
   const setCat = (id, cat) => setRowCats(rc => ({ ...rc, [id]: cat }));
 
-  const approveAllShown = async () => {
-    setBulkBusy(true);
-    try {
-      // Strict mode: approve each tx individually with per-tx override.
-      for (const tx of pageReady) {
-        const cat = rowCats[tx.id];
-        await onApprove(tx.id, cat);
-      }
-      setRowCats({});
-    } finally { setBulkBusy(false); }
+  const approveAllShown = () => {
+    // Optimistic batch: fire one batch request, UI updates instantly.
+    const rows = pageReady.map(tx => ({ tx_id: tx.id, category: rowCats[tx.id] }));
+    onApproveBatch(rows);
+    setRowCats({});
   };
 
   return (
@@ -1523,8 +1597,7 @@ function IncomeApprovalCard({ pendingTxs, onApprove, onApproveTx, onRenameVendor
         </div>
         {pageReady.length > 0 && !collapsed && (
           <button
-            className={"approval-bulk-btn" + (bulkBusy ? " disabled" : "")}
-            disabled={bulkBusy}
+            className="approval-bulk-btn"
             onClick={approveAllShown}
           >Approve {pageReady.length} on this page</button>
         )}

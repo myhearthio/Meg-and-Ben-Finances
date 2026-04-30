@@ -60,19 +60,30 @@ function snapshotYear() {
   return String(Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());
 }
 
+// Resolve a year argument from a tool input. Defaults to current snapshot year.
+// Accepts numbers (2025) or strings ("2025"). Returns string "YYYY".
+function resolveYear(input) {
+  const y = input && input.year;
+  if (y == null || y === "") return snapshotYear();
+  const n = Number(y);
+  if (Number.isFinite(n) && n >= 2000 && n <= 2100) return String(n);
+  return snapshotYear();
+}
+
 async function toolDefs() {
   const cats = await readCategoryKeys();
   return [
     {
       name: "find_transactions",
-      description: "Search current-year transactions. Returns a list of matching tx with date, amount, vendor, mask. NO exclusions applied — never use to rank.",
+      description: "Search transactions across any year (current or prior). Returns a list of matching tx with date, amount, vendor, mask. NO exclusions applied — never use to rank.",
       input_schema: {
         type: "object",
         properties: {
           query: { type: "string", description: "Case-insensitive substring on description/merchant." },
           amount: { type: "number", description: "Exact match (absolute, ±$0.01)." },
-          date_from: { type: "string", description: "YYYY-MM-DD inclusive." },
-          date_to: { type: "string", description: "YYYY-MM-DD inclusive." },
+          year: { type: "number", description: "4-digit year, e.g. 2025. Defaults to current year." },
+          date_from: { type: "string", description: "YYYY-MM-DD inclusive. Overrides year." },
+          date_to: { type: "string", description: "YYYY-MM-DD inclusive. Overrides year." },
           mask: { type: "string", description: "4-digit account mask." },
           limit: { type: "number", description: "Max results." },
         },
@@ -80,20 +91,24 @@ async function toolDefs() {
     },
     {
       name: "get_vendor_total",
-      description: "Exact YTD total spend, count, date range for a vendor (case-insensitive substring match).",
+      description: "Exact total spend, count, date range for a vendor (case-insensitive substring match) for the given year.",
       input_schema: {
         type: "object",
-        properties: { vendor: { type: "string" } },
+        properties: {
+          vendor: { type: "string" },
+          year: { type: "number", description: "4-digit year. Defaults to current." },
+        },
         required: ["vendor"],
       },
     },
     {
       name: "get_category_breakdown",
-      description: `Breakdown for a family category: actual YTD, forecast annual, vendors, optional by-month. Categories: ${cats.join(", ")}.`,
+      description: `Breakdown for a family category: actual for given year, forecast annual, vendors, optional by-month. Categories: ${cats.join(", ")}.`,
       input_schema: {
         type: "object",
         properties: {
           category: { type: "string" },
+          year: { type: "number", description: "4-digit year. Defaults to current." },
           by_month: { type: "boolean" },
         },
         required: ["category"],
@@ -105,6 +120,7 @@ async function toolDefs() {
       input_schema: {
         type: "object",
         properties: {
+          year: { type: "number", description: "4-digit year. Defaults to current. Ignored if month/date_from/date_to set." },
           month: { type: "string", description: "YYYY-MM for a single month." },
           date_from: { type: "string" },
           date_to: { type: "string" },
@@ -115,8 +131,13 @@ async function toolDefs() {
     },
     {
       name: "get_forecast_vs_actual",
-      description: "All family categories at once: forecast annual vs actual YTD vs remaining vs % consumed.",
-      input_schema: { type: "object", properties: {} },
+      description: "All family categories at once: forecast annual vs actual for the year vs remaining vs % consumed.",
+      input_schema: {
+        type: "object",
+        properties: {
+          year: { type: "number", description: "4-digit year. Defaults to current." },
+        },
+      },
     },
     {
       name: "navigate",
@@ -174,17 +195,19 @@ async function t_find_transactions(input, snap) {
   const tx = snap._plaidTx || [];
   const q = (input.query || "").toLowerCase();
   const amt = input.amount != null ? Math.abs(Number(input.amount)) : null;
-  const df = input.date_from, dt = input.date_to;
+  const yr = resolveYear(input);
+  // Default range = whole year. If date_from/date_to passed, those override.
+  const df = input.date_from || `${yr}-01-01`;
+  const dt = input.date_to   || `${yr}-12-31`;
   const mask = input.mask;
   const limit = input.limit ? Math.max(1, input.limit) : Infinity;
-  const yr = snapshotYear();
 
   const hits = [];
   for (const t of tx) {
-    if (!t.date || !t.date.startsWith(yr)) continue;
+    if (!t.date) continue;
     if (mask && t.account_mask !== mask) continue;
-    if (df && t.date < df) continue;
-    if (dt && t.date > dt) continue;
+    if (t.date < df) continue;
+    if (t.date > dt) continue;
     const desc = ((t.name || "") + " " + (t.merchant_name || "") + " " + (t.original_description || "")).toLowerCase();
     if (q && !desc.includes(q)) continue;
     if (amt != null && Math.abs(Math.abs(t.amount) - amt) > 0.01) continue;
@@ -193,6 +216,7 @@ async function t_find_transactions(input, snap) {
   hits.sort((a, b) => b.date.localeCompare(a.date));
   return {
     count: hits.length,
+    period: { from: df, to: dt },
     total: round(hits.reduce((s, h) => s + h.amount, 0)),
     shown: Math.min(hits.length, limit),
     transactions: hits.slice(0, limit),
@@ -200,12 +224,12 @@ async function t_find_transactions(input, snap) {
 }
 
 async function t_get_vendor_total(input, snap) {
-  const result = await t_find_transactions({ query: input.vendor }, snap);
+  const result = await t_find_transactions({ query: input.vendor, year: input.year }, snap);
   const positive = result.transactions.filter(t => t.amount > 0);
-  if (!positive.length) return { vendor: input.vendor, found: false, count: 0, total: 0 };
+  if (!positive.length) return { vendor: input.vendor, year: resolveYear(input), found: false, count: 0, total: 0 };
   const dates = positive.map(t => t.date).sort();
   return {
-    vendor: input.vendor, found: true, count: positive.length,
+    vendor: input.vendor, year: resolveYear(input), found: true, count: positive.length,
     total: round(positive.reduce((s, t) => s + t.amount, 0)),
     date_range: { first: dates[0], last: dates[dates.length - 1] },
     transactions: positive.slice(0, 20),
@@ -214,11 +238,11 @@ async function t_get_vendor_total(input, snap) {
 
 async function t_get_category_breakdown(input, snap) {
   const ov = await readOverrides();
-  const forecast = await readForecast();
+  const yr = resolveYear(input);
+  const forecast = await readForecast(yr);
   const requestedCat = input.category;
   const tx = snap._plaidTx || [];
   const txOv = ov.__tx || {};
-  const yr = snapshotYear();
 
   let total = 0, count = 0;
   const byMonth = {};
@@ -244,7 +268,8 @@ async function t_get_category_breakdown(input, snap) {
 
   const out = {
     category: requestedCat,
-    actual_ytd: round(total),
+    year: yr,
+    actual: round(total),
     charge_count: count,
     forecast_annual: forecastAnnual,
     remaining: round(forecastAnnual - total),
@@ -261,7 +286,7 @@ async function t_get_top_expenses(input, snap) {
   const txOv = ov.__tx || {};
   const limit = Math.min(input.limit || 10, 50);
   const groupBy = input.group_by || "vendor";
-  const yr = snapshotYear();
+  const yr = resolveYear(input);
 
   let df = input.date_from, dt = input.date_to;
   if (input.month) {
@@ -270,6 +295,9 @@ async function t_get_top_expenses(input, snap) {
     const lastDay = new Date(y, m, 0).getDate();
     dt = `${input.month}-${String(lastDay).padStart(2, "0")}`;
   }
+  // If still no range, use whole year.
+  if (!df) df = `${yr}-01-01`;
+  if (!dt) dt = `${yr}-12-31`;
 
   const excludedVendors = new Set();
   for (const [k, v] of Object.entries(ov)) {
@@ -282,9 +310,9 @@ async function t_get_top_expenses(input, snap) {
   let grand = 0, count = 0;
 
   for (const t of tx) {
-    if (!t.date || !t.date.startsWith(yr)) continue;
-    if (df && t.date < df) continue;
-    if (dt && t.date > dt) continue;
+    if (!t.date) continue;
+    if (t.date < df) continue;
+    if (t.date > dt) continue;
     if (t.amount <= 0) continue;
 
     const vKey = normalizeVendor(t.name);
@@ -306,12 +334,12 @@ async function t_get_top_expenses(input, snap) {
   if (groupBy === "transaction") {
     txList.sort((a, b) => b.amount - a.amount);
     return {
-      period: { from: df || `${yr}-01-01`, to: dt || "today" },
+      period: { from: df, to: dt },
       total_expenses: round(grand), tx_count: count, top: txList.slice(0, limit),
     };
   }
   return {
-    period: { from: df || `${yr}-01-01`, to: dt || "today" },
+    period: { from: df, to: dt },
     total_expenses: round(grand), tx_count: count, vendor_count: vendors.length,
     top: vendors.slice(0, limit),
   };
@@ -320,17 +348,19 @@ async function t_get_top_expenses(input, snap) {
 async function t_get_forecast_vs_actual(input, snap) {
   const out = [];
   const cats = await readCategoryKeys();
+  const yr = resolveYear(input);
   for (const c of cats) {
     if (c === "excluded") continue;
-    const b = await t_get_category_breakdown({ category: c }, snap);
+    const b = await t_get_category_breakdown({ category: c, year: yr }, snap);
     out.push({
-      category: c, forecast: b.forecast_annual, actual: b.actual_ytd,
+      category: c, forecast: b.forecast_annual, actual: b.actual,
       remaining: b.remaining, pct_consumed: b.pct_consumed,
     });
   }
   const totalForecast = out.reduce((s, x) => s + x.forecast, 0);
   const totalActual = out.reduce((s, x) => s + x.actual, 0);
   return {
+    year: yr,
     categories: out,
     total_forecast: round(totalForecast),
     total_actual: round(totalActual),

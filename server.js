@@ -150,6 +150,11 @@ function normalizeVendor(raw) {
   if (/^CHECK\b/.test(s)) return "CHECK";
   if (/^ATM WITHDRAWAL/.test(s)) return "ATM WITHDRAWAL";
   if (/VENMO/.test(s)) return "VENMO";
+  // Known multi-format merchants — collapse all variants into a single vendor key
+  // so per-order codes and POS-debit prefixes don't fragment the same merchant
+  // across many vendor rows.
+  if (/AMAZON|AMZN/.test(s)) return "AMAZON";
+  if (/ANTHROPIC/.test(s)) return "ANTHROPIC";
   s = s.replace(/^(TST\*|SQ\s*\*|SP\s+|PAYPAL\s*\*|PP\*|IN\s*\*)/i, "");
   s = s.replace(/\s*\*\s*-?\d{4,}\s*$/, "");
   s = s.replace(/\s*REF#?\s*\d+\s*$/i, "");

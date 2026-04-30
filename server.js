@@ -426,6 +426,33 @@ app.post("/api/forecast", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- Income forecast (year-keyed, person-keyed) ----
+// Keys: "megan", "ben". Same shape as expense forecast.
+const INCOME_FORECAST_KEY_FOR = (year) => `family-income-forecast-${year}`;
+async function _readIncomeForecast(year) {
+  const yr = String(year || new Date().getFullYear());
+  return (await db.kvGet(INCOME_FORECAST_KEY_FOR(yr), {})) || {};
+}
+async function _writeIncomeForecast(obj, year) {
+  const yr = String(year || new Date().getFullYear());
+  await db.kvSet(INCOME_FORECAST_KEY_FOR(yr), obj);
+}
+app.get("/api/income-forecast", async (req, res) => {
+  res.json(await _readIncomeForecast(req.query.year));
+});
+app.post("/api/income-forecast", async (req, res) => {
+  try {
+    const { person, amount, year } = req.body || {};
+    if (!person) return res.status(400).json({ error: "person required" });
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: "amount must be a non-negative number" });
+    const cur = await _readIncomeForecast(year);
+    cur[String(person).toLowerCase()] = Math.round(n);
+    await _writeIncomeForecast(cur, year);
+    res.json({ ok: true, forecast: cur });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ----- Auto-categorization (suggestions only — never silently writes) -----
 // Maps Plaid's personal_finance_category + vendor keywords to family categories.
 // Returns a category key (e.g. "groceries") or "" if no confident guess.

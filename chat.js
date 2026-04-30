@@ -8,7 +8,7 @@ const db = require("./data");
 const tools = require("./tools");
 
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_KEY;
-const MODEL = "claude-sonnet-4-5";
+const MODEL = "claude-opus-4-7";
 const MAX_ITERATIONS = 8;
 const HAROLD_MD_KEY = "HAROLD.md";
 const LEGACY_MD_KEY = "CONNOR.md";

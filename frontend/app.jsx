@@ -1110,7 +1110,9 @@ function ChatPanel() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState([]); // [{filename, mediaType, base64, size}]
   const scrollRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     fetch("/api/harold/history").then(r => r.json()).then(j => {
@@ -1122,12 +1124,56 @@ function ChatPanel() {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
 
+  const onPickFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = ""; // reset so same file can be re-picked
+    const max = 3 - pendingFiles.length;
+    const additions = [];
+    for (const f of files.slice(0, max)) {
+      if (f.size > 25 * 1024 * 1024) {
+        alert(`${f.name}: file too large (max 25 MB).`);
+        continue;
+      }
+      try {
+        const base64 = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => {
+            const s = String(r.result || "");
+            const i = s.indexOf(",");
+            res(i >= 0 ? s.slice(i + 1) : s);
+          };
+          r.onerror = rej;
+          r.readAsDataURL(f);
+        });
+        additions.push({
+          filename: f.name,
+          mediaType: f.type || "application/octet-stream",
+          base64,
+          size: f.size,
+        });
+      } catch (err) {
+        alert(`Failed to read ${f.name}: ${err.message}`);
+      }
+    }
+    if (additions.length) setPendingFiles(p => [...p, ...additions]);
+  };
+
+  const removePendingFile = (idx) => {
+    setPendingFiles(p => p.filter((_, i) => i !== idx));
+  };
+
   const send = async (text) => {
     const t = text != null ? text : input;
-    if (!t.trim() || busy) return;
-    const newMsgs = [...messages, { role: "user", content: t }];
+    if ((!t.trim() && pendingFiles.length === 0) || busy) return;
+
+    // Build user content: string if no attachments, object if attachments.
+    const userContent = pendingFiles.length
+      ? { text: t, attachments: pendingFiles.map(p => ({ filename: p.filename, mediaType: p.mediaType, base64: p.base64 })) }
+      : t;
+    const newMsgs = [...messages, { role: "user", content: userContent }];
     setMessages(newMsgs);
     setInput("");
+    setPendingFiles([]);
     setBusy(true);
     try {
       const r = await fetch("/api/chat", {
@@ -1149,6 +1195,39 @@ function ChatPanel() {
     }
   };
 
+  // Render a message bubble. Content is either a string (legacy/assistant)
+  // or {text, attachments}. We render the text via dangerouslySetInnerHTML
+  // (Harold uses inline HTML chips) but plain-text for user messages.
+  const renderBubble = (m) => {
+    const c = m.content;
+    if (typeof c === "string") {
+      if (m.role === "assistant") {
+        return <div className="msg-bubble" dangerouslySetInnerHTML={{ __html: c }} />;
+      }
+      return <div className="msg-bubble">{c}</div>;
+    }
+    if (c && typeof c === "object") {
+      const text = c.text || "";
+      const atts = Array.isArray(c.attachments) ? c.attachments : [];
+      return (
+        <div className="msg-bubble">
+          {atts.length > 0 && (
+            <div className="msg-attachments">
+              {atts.map((a, i) => (
+                <span key={i} className="att-chip">
+                  <span className="att-icon">{attIcon(a.mediaType)}</span>
+                  <span className="att-name">{a.filename}</span>
+                </span>
+              ))}
+            </div>
+          )}
+          {text && <div>{text}</div>}
+        </div>
+      );
+    }
+    return <div className="msg-bubble">(empty)</div>;
+  };
+
   return (
     <div className="chat">
       <div className="chat-messages" ref={scrollRef}>
@@ -1156,12 +1235,13 @@ function ChatPanel() {
           <div style={{ color: "#888", fontSize: 12, textAlign: "center", padding: 24 }}>
             Hello. Harold here — your family CFO.<br/>
             Bessemer Trust, then a small family office. Now you.<br/>
-            Ask me anything. Spending, the portfolio, REPS, when you can retire.
+            Ask me anything. Spending, the portfolio, REPS, when you can retire.<br/>
+            <span style={{ opacity: 0.6 }}>Attach PDFs, images, or CSVs with the 📎 button.</span>
           </div>
         )}
         {messages.map((m, i) => (
           <div key={i} className={"msg " + m.role}>
-            <div className="msg-bubble" dangerouslySetInnerHTML={{ __html: m.content }} />
+            {renderBubble(m)}
             {m.actions && m.actions.length > 0 && (
               <div className="action-chips">
                 {m.actions.map((a, j) => (
@@ -1173,12 +1253,40 @@ function ChatPanel() {
         ))}
         {busy && <div className="msg assistant"><div className="msg-bubble">…</div></div>}
       </div>
+      {pendingFiles.length > 0 && (
+        <div className="chat-pending">
+          {pendingFiles.map((f, i) => (
+            <span key={i} className="att-chip pending">
+              <span className="att-icon">{attIcon(f.mediaType)}</span>
+              <span className="att-name">{f.filename}</span>
+              <button className="att-x" onClick={() => removePendingFile(i)} aria-label="Remove">✕</button>
+            </span>
+          ))}
+        </div>
+      )}
       <form className="chat-input" onSubmit={e => { e.preventDefault(); send(); }}>
+        <button type="button" className="chat-paperclip" onClick={() => fileInputRef.current?.click()} title="Attach files (PDF, image, CSV)">📎</button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".pdf,.csv,.txt,.json,image/*"
+          style={{ display: "none" }}
+          onChange={onPickFiles}
+        />
         <input value={input} onChange={e => setInput(e.target.value)} placeholder="Ask Harold…" />
         <button type="submit" disabled={busy}>Send</button>
       </form>
     </div>
   );
+}
+
+function attIcon(mediaType) {
+  const mt = (mediaType || "").toLowerCase();
+  if (mt === "application/pdf") return "📄";
+  if (mt.startsWith("image/")) return "🖼";
+  if (mt.includes("csv") || mt.includes("text") || mt.includes("json")) return "📊";
+  return "📎";
 }
 
 // ---- Income ----

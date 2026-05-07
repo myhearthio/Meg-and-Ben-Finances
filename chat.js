@@ -195,6 +195,9 @@ Net Saved YTD: $${(k.net_saved_ytd || 0).toLocaleString()}  ·  Savings Rate: ${
 ${invLine}
 Net Worth: $${Math.round(k.net_worth || 0).toLocaleString()}
 
+== ATTACHMENTS ==
+Ben or Megan may attach PDFs (statements, tax docs, closing docs), images (receipts, screenshots), or CSVs/text files (account exports). Read them carefully. Cross-check what you find against the Dashboard. If a statement reveals a recurring charge or one-time item that isn't categorized correctly, flag it specifically and offer to write a finding to HAROLD.md (only if they say yes). For statements, look for: APR/fees, recurring subscriptions, fraud-pattern charges, items that should be Excluded but aren't.
+
 == TOOLS ==
 All transaction tools accept an optional \`year\` parameter (4-digit, e.g. 2025). Default = current year. Plaid + CSV data covers 2025 + 2026; CSVs may go further back.
 - get_top_expenses(year?, month?, date_from?, date_to?, limit?, group_by?)
@@ -242,7 +245,49 @@ async function chat(userMessages, snapshot) {
   const toolDefs = await tools.getToolDefinitions();
   const toolCalls = [];
 
-  let messages = userMessages.map(m => ({ role: m.role, content: m.content }));
+  // Transform incoming messages: a user message may have content as either:
+  //   - a string (plain text, legacy shape)
+  //   - { text, attachments: [{filename, mediaType, base64, kind}] }  (new shape)
+  // Convert to Anthropic content blocks. PDFs + images become {type:document/image} blocks
+  // with base64 source. CSV/text/JSON files are inlined as text after the user's message.
+  let messages = userMessages.map(m => {
+    if (m.role !== "user") return { role: m.role, content: m.content };
+    const c = m.content;
+    if (typeof c === "string") return { role: "user", content: c };
+    if (c && typeof c === "object" && Array.isArray(c.attachments) && c.attachments.length) {
+      const blocks = [];
+      const text = (c.text || "").trim();
+      const inlineTextChunks = [];
+      for (const att of c.attachments) {
+        const mt = (att.mediaType || "").toLowerCase();
+        const fname = att.filename || "attachment";
+        if (mt.startsWith("image/")) {
+          blocks.push({
+            type: "image",
+            source: { type: "base64", media_type: mt, data: att.base64 || "" },
+          });
+        } else if (mt === "application/pdf") {
+          blocks.push({
+            type: "document",
+            source: { type: "base64", media_type: "application/pdf", data: att.base64 || "" },
+          });
+        } else {
+          // CSV, text, JSON — decode base64 and inline as a text block.
+          let decoded = "";
+          try { decoded = Buffer.from(att.base64 || "", "base64").toString("utf-8"); }
+          catch { decoded = "(could not decode)"; }
+          // Cap inlined text to ~150KB so we don't blow the prompt.
+          if (decoded.length > 150000) decoded = decoded.slice(0, 150000) + "\n\n[...truncated]";
+          inlineTextChunks.push(`\n\n--- Attachment: ${fname} (${mt || "text"}) ---\n${decoded}\n--- end ${fname} ---`);
+        }
+      }
+      const fullText = (text || "(see attachments)") + inlineTextChunks.join("");
+      blocks.push({ type: "text", text: fullText });
+      return { role: "user", content: blocks };
+    }
+    // Fallback: stringify whatever it is.
+    return { role: "user", content: typeof c === "string" ? c : JSON.stringify(c) };
+  });
   let actions = [];
   let finalText = "";
 

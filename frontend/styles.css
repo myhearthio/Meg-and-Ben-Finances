@@ -525,6 +525,38 @@ body {
   padding: 10px 16px; background: var(--text); color: white;
   border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px;
 }
+.chat-input button[type="submit"]:disabled { opacity: 0.4; cursor: not-allowed; }
+.chat-paperclip {
+  background: transparent !important; color: var(--text-2) !important;
+  border: 1px solid var(--border-strong) !important; padding: 8px 10px !important;
+  border-radius: var(--radius-sm); cursor: pointer; font-size: 16px; line-height: 1;
+}
+.chat-paperclip:hover { background: var(--panel-2) !important; }
+.chat-pending {
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px 0;
+}
+.att-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 999px; font-size: 11px; color: var(--text);
+  max-width: 220px;
+}
+.att-chip.pending { background: var(--panel); }
+.att-chip .att-icon { font-size: 13px; }
+.att-chip .att-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 170px;
+}
+.att-chip .att-x {
+  background: transparent; border: none; color: var(--text-2);
+  cursor: pointer; padding: 0 2px; font-size: 12px; line-height: 1;
+}
+.att-chip .att-x:hover { color: var(--text); }
+.msg-attachments {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px;
+}
+.msg.user .msg-attachments .att-chip {
+  background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.25); color: white;
+}
 
 /* Error screen */
 .err-screen {

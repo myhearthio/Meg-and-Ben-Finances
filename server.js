@@ -32,7 +32,7 @@ const { chat, readHaroldMd, readHistory, writeHistory } = require("./chat");
 const app = express();
 const BOOT_TIME = new Date().toISOString();
 app.use(cors());
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "30mb" }));
 
 const frontendDir = path.join(__dirname, "frontend");
 app.use("/", express.static(frontendDir));

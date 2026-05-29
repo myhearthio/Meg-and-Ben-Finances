@@ -949,6 +949,7 @@ app.post("/api/investments", async (req, res) => {
       if (body.value !== undefined) row.value = Number(body.value) || 0;
       if (body.source !== undefined) row.source = String(body.source);
       if (body.note !== undefined) row.note = String(body.note);
+      if (body.instructions !== undefined) row.instructions = String(body.instructions);
       row.updated_at = new Date().toISOString();
     } else {
       row = {
@@ -957,6 +958,7 @@ app.post("/api/investments", async (req, res) => {
         value: Number(body.value) || 0,
         source: String(body.source || "manual"),
         note: String(body.note || ""),
+        instructions: String(body.instructions || ""),
         updated_at: new Date().toISOString(),
       };
       list.push(row);

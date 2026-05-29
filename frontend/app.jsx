@@ -1770,11 +1770,39 @@ function IncomeApprovalRow({ tx, cat, onCatChange, onApprove, onRenameVendor, on
 // ---- Investments ----
 // One row per investment source. Drag a PDF onto a row to update its value.
 // "Manual" rows are typed numbers (real estate, etc).
+
+// Sensible default "where do I get this number" guidance, matched by name keywords.
+// Used when an investment row has no explicit `instructions` saved yet.
+function defaultInstructions(name) {
+  const n = (name || "").toLowerCase();
+  if (/rockefeller|rockafeller/.test(n)) return "Log into rockefellerdigital.com → Total Net Worth. Or drag the statement PDF onto the row and it auto-reads.";
+  if (/401|netbenefits|fidelity/.test(n)) return "Log into Fidelity NetBenefits (Lilly 401k) → current total balance.";
+  if (/\blly\b|lilly|eli lilly/.test(n)) return "Shares × current LLY share price. Google 'LLY stock' for the live price, multiply by your share count.";
+  if (/compass|\bcomp\b/.test(n)) return "Shares × current COMP (Compass) share price. Google 'Compass stock'.";
+  if (/529/.test(n)) return "Log into BrightDirections (or your 529 provider) → total balance across the kids' accounts.";
+  if (/treasury|t-bill|tbill|bond/.test(n)) return "Log into TreasuryDirect → current value (includes accrued interest).";
+  if (/genesis|minivan|\bcar\b|vehicle|truck|suv/.test(n)) return "KBB.com or Edmunds → 'trade-in' value for your make/model/mileage.";
+  if (/equity|blvd|\bn\.|\bw\.|\bst\b|ave|street|property|home|house|duplex|rental/.test(n)) return "Current market value (Zillow 'Zestimate' is fine) minus your remaining mortgage balance = equity.";
+  return "Update from your latest statement or account portal.";
+}
+
+// Days since an ISO timestamp. Returns null if no date.
+function daysSince(iso) {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (isNaN(then)) return null;
+  return Math.floor((Date.now() - then) / 86400000);
+}
+
+// A row is "stale" if it hasn't been updated in 45+ days.
+const STALE_DAYS = 45;
+
 function InvestmentsView() {
   const [list, setList] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [walkthrough, setWalkthrough] = useState(null); // null | "stale" | "all"
 
   const load = async () => {
     try {
@@ -1786,14 +1814,32 @@ function InvestmentsView() {
   };
   useEffect(() => { load(); }, []);
 
+  const staleCount = list.filter(r => {
+    const d = daysSince(r.updated_at);
+    return d == null || d >= STALE_DAYS;
+  }).length;
+
   return (
     <div>
-      <div className="page-title">Investments</div>
-      <div className="page-subtitle">Drag a Rockefeller statement PDF onto its row to refresh. Type a value for everything else.</div>
+      <div className="inv-header">
+        <div>
+          <div className="page-title">Investments</div>
+          <div className="page-subtitle">Drag a Rockefeller statement PDF onto its row to refresh. Type a value for everything else.</div>
+        </div>
+        {!loading && list.length > 0 && (
+          <button className="inv-review-btn" onClick={() => setWalkthrough(staleCount > 0 ? "stale" : "all")}>
+            Review &amp; Update
+            {staleCount > 0 && <span className="inv-review-badge">{staleCount}</span>}
+          </button>
+        )}
+      </div>
 
       <div className="inv-total-card">
         <div className="inv-total-label">Total invested</div>
         <div className="inv-total-value">{fmt(total)}</div>
+        {!loading && staleCount > 0 && (
+          <div className="inv-total-stale">{staleCount} item{staleCount === 1 ? "" : "s"} need{staleCount === 1 ? "s" : ""} a refresh (45+ days old)</div>
+        )}
       </div>
 
       <div className="inv-list">
@@ -1811,6 +1857,107 @@ function InvestmentsView() {
       ) : (
         <button className="inv-add-btn" onClick={() => setShowAdd(true)}>+ Add investment</button>
       )}
+
+      {walkthrough && (
+        <UpdateWalkthrough
+          items={walkthrough === "stale"
+            ? list.filter(r => { const d = daysSince(r.updated_at); return d == null || d >= STALE_DAYS; })
+            : list}
+          allCount={list.length}
+          mode={walkthrough}
+          onSwitchToAll={() => setWalkthrough("all")}
+          onClose={() => { setWalkthrough(null); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// Step-through modal that walks the user item-by-item to refresh values.
+function UpdateWalkthrough({ items, allCount, mode, onSwitchToAll, onClose }) {
+  const [idx, setIdx] = useState(0);
+  const [val, setVal] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [changed, setChanged] = useState(0);
+
+  const item = items[idx];
+  useEffect(() => { if (item) setVal(String(item.value || 0)); }, [idx, item]);
+
+  if (!item) {
+    // Empty (nothing stale) or finished.
+    return (
+      <div className="inv-modal-overlay" onClick={onClose}>
+        <div className="inv-modal" onClick={e => e.stopPropagation()}>
+          <div className="inv-modal-title">All caught up</div>
+          <div className="inv-modal-body">
+            {changed > 0
+              ? `Updated ${changed} item${changed === 1 ? "" : "s"}. Net worth refreshed.`
+              : (mode === "stale"
+                  ? "Nothing's gone stale. Everything's been updated in the last 45 days."
+                  : "No changes made.")}
+          </div>
+          <div className="inv-modal-actions">
+            {mode === "stale" && allCount > items.length && (
+              <button className="inv-btn-secondary" onClick={() => { setIdx(0); setChanged(0); onSwitchToAll(); }}>Review all {allCount} anyway</button>
+            )}
+            <button className="inv-btn-primary" onClick={onClose}>Done</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const instr = item.instructions || defaultInstructions(item.name);
+  const d = daysSince(item.updated_at);
+  const ageLabel = d == null ? "never updated" : d === 0 ? "updated today" : `updated ${d} day${d === 1 ? "" : "s"} ago`;
+
+  const saveAndNext = async (skip) => {
+    if (!skip) {
+      const newVal = Number(String(val).replace(/[^0-9.\-]/g, "")) || 0;
+      if (newVal !== item.value) {
+        setBusy(true);
+        try {
+          await fetch("/api/investments", {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ id: item.id, value: newVal, source: "manual" }),
+          });
+          setChanged(c => c + 1);
+        } finally { setBusy(false); }
+      }
+    }
+    setIdx(i => i + 1);
+  };
+
+  return (
+    <div className="inv-modal-overlay" onClick={onClose}>
+      <div className="inv-modal" onClick={e => e.stopPropagation()}>
+        <div className="inv-modal-progress">{idx + 1} of {items.length}{mode === "stale" ? " stale" : ""}</div>
+        <div className="inv-modal-title">{item.name}</div>
+        <div className={"inv-modal-age" + ((d == null || d >= STALE_DAYS) ? " stale" : "")}>{ageLabel}</div>
+
+        <div className="inv-modal-instr">
+          <div className="inv-modal-instr-label">Where to get the number</div>
+          <div>{instr}</div>
+        </div>
+
+        <div className="inv-modal-field">
+          <label>Current value</label>
+          <input
+            value={val}
+            autoFocus
+            onChange={e => setVal(e.target.value.replace(/[^0-9.\-]/g, ""))}
+            onKeyDown={e => { if (e.key === "Enter") saveAndNext(false); }}
+            placeholder="0"
+          />
+          <div className="inv-modal-was">was {fmt(item.value)}</div>
+        </div>
+
+        <div className="inv-modal-actions">
+          <button className="inv-btn-ghost" onClick={onClose}>Close</button>
+          <button className="inv-btn-secondary" onClick={() => saveAndNext(true)} disabled={busy}>No change →</button>
+          <button className="inv-btn-primary" onClick={() => saveAndNext(false)} disabled={busy}>{busy ? "Saving…" : "Save & next →"}</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1909,7 +2056,12 @@ function InvestmentRow({ row, onChange, total }) {
         )}
       </div>
       <div className="inv-row-meta">
-        {row.updated_at && <span>Updated {new Date(row.updated_at).toLocaleDateString()}</span>}
+        {(() => {
+          const d = daysSince(row.updated_at);
+          if (d == null) return <span className="inv-stale-badge">never updated</span>;
+          if (d >= STALE_DAYS) return <span className="inv-stale-badge">{d}d old — refresh</span>;
+          return <span>Updated {new Date(row.updated_at).toLocaleDateString()}</span>;
+        })()}
         {row.last_pdf_as_of && <span>· Statement as of {row.last_pdf_as_of}</span>}
         {row.last_pdf_label && <span>· {row.last_pdf_label}</span>}
         {row.source === "rockefeller" && <span>· From PDF</span>}

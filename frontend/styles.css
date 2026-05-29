@@ -733,6 +733,54 @@ body {
   cursor: pointer; font-size: 13px; font-family: inherit; width: 100%;
 }
 .inv-add-btn:hover { background: var(--panel-2); color: var(--text); border-color: var(--border-strong); }
+
+/* Investments header + review button */
+.inv-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.inv-review-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 16px; background: var(--text); color: white;
+  border: none; border-radius: var(--radius-sm); cursor: pointer;
+  font-size: 13px; font-weight: 600; font-family: inherit; white-space: nowrap;
+}
+.inv-review-btn:hover { background: #000; }
+.inv-review-badge {
+  background: var(--amber, #d97706); color: white; border-radius: 999px;
+  font-size: 11px; font-weight: 700; padding: 1px 7px; line-height: 1.5;
+}
+.inv-total-stale { margin-top: 6px; font-size: 12px; color: var(--amber, #d97706); font-weight: 500; }
+.inv-stale-badge {
+  background: rgba(217,119,6,0.12); color: var(--amber, #d97706);
+  border-radius: 4px; padding: 1px 6px; font-weight: 600;
+}
+
+/* Walkthrough modal */
+.inv-modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px;
+}
+.inv-modal {
+  background: var(--panel); border-radius: var(--radius); border: 1px solid var(--border);
+  width: 100%; max-width: 460px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+}
+.inv-modal-progress { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-subtle); font-weight: 600; }
+.inv-modal-title { font-size: 22px; font-weight: 700; margin-top: 4px; }
+.inv-modal-age { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.inv-modal-age.stale { color: var(--amber, #d97706); font-weight: 600; }
+.inv-modal-instr {
+  margin-top: 16px; padding: 12px 14px; background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; line-height: 1.5;
+}
+.inv-modal-instr-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-subtle); font-weight: 600; margin-bottom: 4px; }
+.inv-modal-field { margin-top: 16px; }
+.inv-modal-field label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; }
+.inv-modal-field input {
+  width: 100%; padding: 12px 14px; font-size: 20px; font-family: "JetBrains Mono", monospace;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-sizing: border-box;
+}
+.inv-modal-was { font-size: 12px; color: var(--text-subtle); margin-top: 6px; }
+.inv-modal-body { margin-top: 14px; font-size: 14px; line-height: 1.5; color: var(--text); }
+.inv-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; flex-wrap: wrap; }
+
 .inv-add-form {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 16px;

@@ -565,8 +565,23 @@ function BudgetHistorical_unused() { return null;
 function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, readOnly }) {
   const [expanded, setExpanded] = useState({});
   const [expandedVendors, setExpandedVendors] = useState({});
+  // Optimistic approvals: txId -> category. Applied on top of server data so the
+  // queue row vanishes instantly when the user hits Approve, even while the
+  // network request is still in flight.
+  const [optimisticTx, setOptimisticTx] = useState({});
   const toggle = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
   const toggleVendor = (vk) => setExpandedVendors(e => ({ ...e, [vk]: !e[vk] }));
+
+  // Merge optimistic approvals over server vendors: stamp userSet + override cat.
+  const mergedVendors = (actuals?.vendors || []).map(v => ({
+    ...v,
+    txs: (v.txs || []).map(tx => {
+      const ov = optimisticTx[tx.id];
+      if (!ov) return tx;
+      return { ...tx, cat: ov, userSet: true };
+    }),
+  }));
+  const mergedActuals = { ...(actuals || {}), vendors: mergedVendors };
 
   const rawForecast = (k) => Number(forecast[k] || 0);
   // Effective forecast for a row: parents = sum of children + own (if any); leafs = own.
@@ -580,7 +595,7 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
     .filter(c => !c.isExcluded && !isParent(c.key))
     .reduce((s, c) => s + rawForecast(c.key), 0);
 
-  const rawActual = (k) => Number((actuals?.byCategory || {})[k] || 0);
+  const rawActual = (k) => Number((mergedByCategory || {})[k] || 0);
   const actualByCat = (() => {
     // Parent actuals = own + children's actuals (transactions can be on either).
     const out = { ...(actuals?.byCategory || {}) };
@@ -602,8 +617,18 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
     .filter(c => !c.isExcluded)
     .reduce((s, c) => s + rawActual(c.key), 0);
 
+  // Recompute byCategory from merged vendors so optimistic approvals flow into
+  // every category total instantly.
+  const mergedByCategory = (() => {
+    const out = {};
+    for (const v of mergedVendors) for (const tx of (v.txs || [])) {
+      out[tx.cat] = (out[tx.cat] || 0) + tx.amount;
+    }
+    return out;
+  })();
+
   const pendingTxs = [];
-  for (const v of (actuals?.vendors || [])) {
+  for (const v of mergedVendors) {
     for (const tx of (v.txs || [])) {
       if (!tx.userSet) pendingTxs.push({ ...tx, vendorKey: v.key, vendorName: v.name });
     }
@@ -611,7 +636,7 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
   pendingTxs.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 
   const vendorsByCat = {};
-  for (const v of (actuals?.vendors || [])) {
+  for (const v of mergedVendors) {
     const sumByCat = {};
     for (const tx of (v.txs || [])) sumByCat[tx.cat] = (sumByCat[tx.cat] || 0) + tx.amount;
     for (const [cat, amt] of Object.entries(sumByCat)) {
@@ -631,6 +656,38 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
   const refreshActuals = async () => {
     const fresh = await fetch("/api/actuals?year=" + (year || "")).then(r => r.json());
     setActuals(fresh);
+    // Drop optimistic entries the server has now confirmed (userSet=true).
+    setOptimisticTx(prev => {
+      const serverApproved = new Set();
+      for (const v of (fresh?.vendors || [])) for (const t of (v.txs || [])) {
+        if (t.userSet) serverApproved.add(t.id);
+      }
+      const next = {};
+      for (const [id, cat] of Object.entries(prev)) {
+        if (!serverApproved.has(id)) next[id] = cat;
+      }
+      return next;
+    });
+  };
+
+  // Optimistic approve from the queue: stamp locally, fire request in background.
+  const approveTxOptimistic = (txId, newCat, vendorKey) => {
+    setOptimisticTx(prev => ({ ...prev, [txId]: newCat }));
+    (async () => {
+      try {
+        await fetch("/api/actuals", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tx_id: txId, category: newCat }),
+        });
+        if (vendorKey) {
+          await fetch("/api/actuals", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ vendor_key: vendorKey, category: newCat }),
+          });
+        }
+        await refreshActuals();
+      } catch (e) { /* leave optimistic stamp in place; next refresh reconciles */ }
+    })();
   };
 
   const moveVendor = async (vendorKey, newCat) => {
@@ -680,7 +737,7 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
     <>
       {pendingTxs.length > 0 && (
         <ApprovalCard pendingTxs={pendingTxs}
-          onApprove={async (txId, cat, vendorKey) => { await moveTx(txId, cat, vendorKey); }}
+          onApprove={(txId, cat, vendorKey) => { approveTxOptimistic(txId, cat, vendorKey); }}
           onRenameVendor={renameVendor}
           onRenameTx={renameTx}
         />

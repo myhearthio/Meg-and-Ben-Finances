@@ -595,6 +595,17 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
     .filter(c => !c.isExcluded && !isParent(c.key))
     .reduce((s, c) => s + rawForecast(c.key), 0);
 
+  // Recompute byCategory from merged vendors so optimistic approvals flow into
+  // every category total instantly. MUST be declared before rawActual/actualGrand
+  // use it — otherwise it's a temporal-dead-zone ReferenceError that blanks the page.
+  const mergedByCategory = (() => {
+    const out = {};
+    for (const v of mergedVendors) for (const tx of (v.txs || [])) {
+      out[tx.cat] = (out[tx.cat] || 0) + tx.amount;
+    }
+    return out;
+  })();
+
   const rawActual = (k) => Number((mergedByCategory || {})[k] || 0);
   const actualByCat = (() => {
     // Parent actuals = own + children's actuals (transactions can be on either).
@@ -616,16 +627,6 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
   const actualGrand = FAMILY_CATS
     .filter(c => !c.isExcluded)
     .reduce((s, c) => s + rawActual(c.key), 0);
-
-  // Recompute byCategory from merged vendors so optimistic approvals flow into
-  // every category total instantly.
-  const mergedByCategory = (() => {
-    const out = {};
-    for (const v of mergedVendors) for (const tx of (v.txs || [])) {
-      out[tx.cat] = (out[tx.cat] || 0) + tx.amount;
-    }
-    return out;
-  })();
 
   const pendingTxs = [];
   for (const v of mergedVendors) {

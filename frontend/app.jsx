@@ -121,6 +121,31 @@ const fmtTxDate = (d) => {
 };
 const fmtPct = (n) => (n == null || isNaN(n)) ? "0%" : `${n}%`;
 
+// Lightweight confirmation toast. Approving/moving a row lands it in a category
+// that may be collapsed, which felt like the row "disappeared". This shows WHERE
+// it went so the action always has visible feedback.
+let _toastTimer = null;
+function flashToast(msg) {
+  let el = document.getElementById("mb-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "mb-toast";
+    el.style.cssText = "position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(8px);background:#1f2937;color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;font-weight:600;box-shadow:0 6px 24px rgba(0,0,0,.25);z-index:9999;opacity:0;transition:opacity .18s ease,transform .18s ease;pointer-events:none;max-width:80vw;text-align:center;";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  requestAnimationFrame(() => {
+    el.style.opacity = "1";
+    el.style.transform = "translateX(-50%) translateY(0)";
+  });
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => {
+    el.style.opacity = "0";
+    el.style.transform = "translateX(-50%) translateY(8px)";
+  }, 2200);
+}
+const catLabel = (key) => (FAMILY_CATS.find(c => c.key === key) || {}).label || key;
+
 function App() {
   const [tab, setTab] = useState(() => localStorage.getItem("mb_tab") || "dashboard");
   const [year, setYear] = useState(() => Number(localStorage.getItem("mb_year")) || new Date().getFullYear());
@@ -674,6 +699,9 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
   // Optimistic approve from the queue: stamp locally, fire request in background.
   const approveTxOptimistic = (txId, newCat, vendorKey) => {
     setOptimisticTx(prev => ({ ...prev, [txId]: newCat }));
+    // Open the destination category so the row is visible where it landed.
+    setExpanded(e => ({ ...e, [newCat]: true }));
+    flashToast("Moved to " + catLabel(newCat));
     (async () => {
       try {
         await fetch("/api/actuals", {
@@ -692,6 +720,8 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
   };
 
   const moveVendor = async (vendorKey, newCat) => {
+    setExpanded(e => ({ ...e, [newCat]: true }));
+    flashToast("Moved to " + catLabel(newCat));
     await fetch("/api/actuals", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -701,6 +731,8 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
   };
 
   const moveTx = async (txId, newCat, vendorKey) => {
+    setExpanded(e => ({ ...e, [newCat]: true }));
+    flashToast("Moved to " + catLabel(newCat));
     await fetch("/api/actuals", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1441,6 +1473,9 @@ function IncomeView({ snap }) {
   // background. Used by the queue so it never flashes "Loading…".
   const approveTxOptimistic = (txId, category) => {
     setOptimisticTx(prev => ({ ...prev, [txId]: category }));
+    // Open the destination section (Excluded starts collapsed) so the row shows.
+    setCollapsedSections(s => ({ ...s, [category]: false }));
+    flashToast("Tagged as " + ((INCOME_CATS.find(c => c.key === category) || {}).label || category));
     // Fire the network call but don't await UI on it.
     fetch("/api/income", {
       method: "POST",
@@ -1457,6 +1492,12 @@ function IncomeView({ snap }) {
       for (const r of rows) next[r.tx_id] = r.category;
       return next;
     });
+    setCollapsedSections(s => {
+      const next = { ...s };
+      for (const r of rows) next[r.category] = false;
+      return next;
+    });
+    flashToast(rows.length + " deposit" + (rows.length === 1 ? "" : "s") + " tagged");
     const ops = rows.map(r => ({ tx_id: r.tx_id, category: r.category }));
     fetch("/api/income/batch", {
       method: "POST",
@@ -1465,8 +1506,16 @@ function IncomeView({ snap }) {
     }).then(() => reload({ background: true })).catch(() => {});
   };
 
-  const setVendorCat = (vendor_key, category) => post({ vendor_key, category });
-  const setTxCat = (tx_id, category) => post({ tx_id, category });
+  const setVendorCat = (vendor_key, category) => {
+    setCollapsedSections(s => ({ ...s, [category]: false }));
+    flashToast("Moved to " + ((INCOME_CATS.find(c => c.key === category) || {}).label || category));
+    return post({ vendor_key, category });
+  };
+  const setTxCat = (tx_id, category) => {
+    setCollapsedSections(s => ({ ...s, [category]: false }));
+    flashToast("Moved to " + ((INCOME_CATS.find(c => c.key === category) || {}).label || category));
+    return post({ tx_id, category });
+  };
   const renameVendor = (vendor_key, name) => post({ vendor_key, name });
   const renameTx = (tx_id, desc) => post({ tx_id, desc });
 

@@ -468,6 +468,7 @@ app.get("/api/upload/csv/:mask", async (req, res) => {
 });
 
 app.get("/api/upload/status", (req, res) => {
+  const out = {};
   for (const m of csv.listMasks()) {
     const r = csv.loadCsvTx(m);
     out[m] = {

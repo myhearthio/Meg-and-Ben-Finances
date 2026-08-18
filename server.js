@@ -879,6 +879,64 @@ app.post("/api/income/batch", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Batch endpoint: apply N expense overrides in one round-trip (one kv write).
+// Body: { ops: [{ tx_id, category }, { vendor_key, category }, ...] } — same op
+// shapes as POST /api/actuals. Vendor ops clear stale per-tx overrides for that
+// vendor (2026-04-29 rule); tx ops in the SAME batch are applied AFTER the clear,
+// so a batch can set a vendor rule plus per-tx exceptions in one call.
+app.post("/api/actuals/batch", async (req, res) => {
+  try {
+    const ops = (req.body && req.body.ops) || [];
+    if (!Array.isArray(ops) || ops.length === 0) {
+      return res.status(400).json({ error: "ops must be a non-empty array" });
+    }
+    let applied = 0;
+    const vendorKeysToClear = [];
+    const txOpsDeferred = [];
+    await _queueOverrideUpdate(async (obj) => {
+      for (const op of ops) {
+        if (op.tx_id && op.desc !== undefined) {
+          obj.__tx_desc = obj.__tx_desc || {};
+          if (op.desc) obj.__tx_desc[op.tx_id] = op.desc;
+          else delete obj.__tx_desc[op.tx_id];
+          applied++;
+        } else if (op.tx_id && op.category) {
+          txOpsDeferred.push(op);
+          applied++;
+        } else if (op.vendor_key && op.name !== undefined) {
+          obj.__names = obj.__names || {};
+          if (op.name) obj.__names[op.vendor_key] = op.name;
+          else delete obj.__names[op.vendor_key];
+          applied++;
+        } else if (op.vendor_key && op.category) {
+          obj[op.vendor_key] = op.category;
+          vendorKeysToClear.push(op.vendor_key);
+          applied++;
+        }
+      }
+      if (vendorKeysToClear.length > 0 && obj.__tx) {
+        const snap = await getSnapshot(false).catch(() => null);
+        const plaidTx = (snap && snap._plaidTx) || [];
+        const wantedVendors = new Set(vendorKeysToClear);
+        for (const t of plaidTx) {
+          const raw = String(t.name || "").trim();
+          const vKey = normalizeVendor(raw);
+          if (wantedVendors.has(vKey)) {
+            const txId = (t.date || "") + "|" + Number(t.amount) + "|" + raw.slice(0, 60);
+            delete obj.__tx[txId];
+          }
+        }
+      }
+      if (txOpsDeferred.length > 0) {
+        obj.__tx = obj.__tx || {};
+        for (const op of txOpsDeferred) obj.__tx[op.tx_id] = op.category;
+      }
+    });
+    invalidateCache();
+    res.json({ ok: true, applied });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get("/api/categories", async (req, res) => {
   try { res.json({ categories: await _readCategories() }); }
   catch (e) { res.status(500).json({ error: e.message }); }

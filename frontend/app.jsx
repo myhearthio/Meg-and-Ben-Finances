@@ -697,7 +697,11 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
   };
 
   // Optimistic approve from the queue: stamp locally, fire request in background.
-  const approveTxOptimistic = (txId, newCat, vendorKey) => {
+  // Per-tx ONLY — approving one transaction must never write a vendor rule
+  // (a vendor rule auto-approves every other pending tx from that vendor,
+  // which made the whole queue vanish in one click). Vendor-wide approval
+  // is a separate, explicit action (approveVendorOptimistic).
+  const approveTxOptimistic = (txId, newCat) => {
     setOptimisticTx(prev => ({ ...prev, [txId]: newCat }));
     // Open the destination category so the row is visible where it landed.
     setExpanded(e => ({ ...e, [newCat]: true }));
@@ -708,14 +712,30 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ tx_id: txId, category: newCat }),
         });
-        if (vendorKey) {
-          await fetch("/api/actuals", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ vendor_key: vendorKey, category: newCat }),
-          });
-        }
         await refreshActuals();
       } catch (e) { /* leave optimistic stamp in place; next refresh reconciles */ }
+    })();
+  };
+
+  // Explicit vendor-wide approve: user clicked "All N from this vendor".
+  const approveVendorOptimistic = (vendorKey, newCat) => {
+    const stamped = {};
+    for (const v of mergedVendors) {
+      if (v.key !== vendorKey) continue;
+      for (const tx of (v.txs || [])) if (!tx.userSet) stamped[tx.id] = newCat;
+    }
+    const n = Object.keys(stamped).length;
+    setOptimisticTx(prev => ({ ...prev, ...stamped }));
+    setExpanded(e => ({ ...e, [newCat]: true }));
+    flashToast(n + " moved to " + catLabel(newCat));
+    (async () => {
+      try {
+        await fetch("/api/actuals", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ vendor_key: vendorKey, category: newCat }),
+        });
+        await refreshActuals();
+      } catch (e) { /* reconcile on next refresh */ }
     })();
   };
 
@@ -730,7 +750,8 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
     await refreshActuals();
   };
 
-  const moveTx = async (txId, newCat, vendorKey) => {
+  // Per-tx only — moving one tx must not rewrite the vendor rule.
+  const moveTx = async (txId, newCat) => {
     setExpanded(e => ({ ...e, [newCat]: true }));
     flashToast("Moved to " + catLabel(newCat));
     await fetch("/api/actuals", {
@@ -738,13 +759,6 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tx_id: txId, category: newCat }),
     });
-    if (vendorKey) {
-      await fetch("/api/actuals", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vendor_key: vendorKey, category: newCat }),
-      });
-    }
     await refreshActuals();
   };
 
@@ -770,7 +784,8 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
     <>
       {pendingTxs.length > 0 && (
         <ApprovalCard pendingTxs={pendingTxs}
-          onApprove={(txId, cat, vendorKey) => { approveTxOptimistic(txId, cat, vendorKey); }}
+          onApprove={(txId, cat) => { approveTxOptimistic(txId, cat); }}
+          onApproveVendor={(vendorKey, cat) => { approveVendorOptimistic(vendorKey, cat); }}
           onRenameVendor={renameVendor}
           onRenameTx={renameTx}
         />
@@ -888,7 +903,10 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
   );
 }
 
-function ApprovalCard({ pendingTxs, onApprove, onRenameVendor, onRenameTx }) {
+function ApprovalCard({ pendingTxs, onApprove, onApproveVendor, onRenameVendor, onRenameTx }) {
+  // How many pending txs each vendor has — powers the "All N from this vendor" button.
+  const vendorPendingCount = {};
+  for (const t of pendingTxs) vendorPendingCount[t.vendorKey] = (vendorPendingCount[t.vendorKey] || 0) + 1;
   const [bulkBusy, setBulkBusy] = useState(false);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("mb_approval_collapsed") === "1");
   const [page, setPage] = useState(0);
@@ -920,7 +938,7 @@ function ApprovalCard({ pendingTxs, onApprove, onRenameVendor, onRenameTx }) {
     if (bulkBusy || pageReady.length === 0) return;
     setBulkBusy(true);
     for (const tx of pageReady) {
-      await onApprove(tx.id, rowCats[tx.id], tx.vendorKey);
+      await onApprove(tx.id, rowCats[tx.id]);
     }
     setBulkBusy(false);
   };
@@ -956,8 +974,10 @@ function ApprovalCard({ pendingTxs, onApprove, onRenameVendor, onRenameTx }) {
             {pageTxs.map(tx => (
               <ApprovalRow key={tx.id} tx={tx}
                 cat={rowCats[tx.id] || ""}
+                vendorPending={vendorPendingCount[tx.vendorKey] || 0}
                 onCatChange={(c) => setCat(tx.id, c)}
-                onApprove={async () => onApprove(tx.id, rowCats[tx.id] || tx.suggestion, tx.vendorKey)}
+                onApprove={async () => onApprove(tx.id, rowCats[tx.id] || tx.suggestion)}
+                onApproveVendor={async () => onApproveVendor(tx.vendorKey, rowCats[tx.id] || tx.suggestion)}
                 onRenameVendor={async (n) => onRenameVendor(tx.vendorKey, n)}
                 onRenameTx={async (n) => onRenameTx(tx.id, n)}
               />
@@ -986,7 +1006,7 @@ function ApprovalCard({ pendingTxs, onApprove, onRenameVendor, onRenameTx }) {
   );
 }
 
-function ApprovalRow({ tx, cat, onCatChange, onApprove, onRenameVendor, onRenameTx }) {
+function ApprovalRow({ tx, cat, vendorPending, onCatChange, onApprove, onApproveVendor, onRenameVendor, onRenameTx }) {
   useFamilyCats();
   const [busy, setBusy] = useState(false);
   const fmtDate = (d) => { if (!d) return ""; const p = d.split("-"); return p.length === 3 ? p[1]+"/"+p[2] : d; };
@@ -994,6 +1014,11 @@ function ApprovalRow({ tx, cat, onCatChange, onApprove, onRenameVendor, onRename
     if (!cat || busy) return;
     setBusy(true);
     await onApprove();
+  };
+  const goVendor = async () => {
+    if (!cat || busy) return;
+    setBusy(true);
+    await onApproveVendor();
   };
   return (
     <div className="approval-row">
@@ -1007,9 +1032,19 @@ function ApprovalRow({ tx, cat, onCatChange, onApprove, onRenameVendor, onRename
         <option value="">Choose category…</option>
         {FAMILY_CATS.map(c => <option key={c.key} value={c.key}>{c.parent ? "\u00A0\u00A0\u2014 " + c.label : c.label}</option>)}
       </select>
-      <button className={"approval-row-btn" + ((!cat || busy) ? " disabled" : "")} disabled={!cat || busy} onClick={go}>
-        {busy ? "…" : "Approve"}
-      </button>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "stretch" }}>
+        <button className={"approval-row-btn" + ((!cat || busy) ? " disabled" : "")} disabled={!cat || busy} onClick={go}>
+          {busy ? "…" : "Approve"}
+        </button>
+        {vendorPending > 1 && (
+          <button
+            disabled={!cat || busy}
+            onClick={goVendor}
+            title={"Categorize all " + vendorPending + " pending transactions from this vendor and remember it for the future"}
+            style={{ padding: "3px 6px", border: "1px solid #d4d4d0", background: "#fafaf8", borderRadius: 5, fontSize: 10.5, color: "#666", cursor: (!cat || busy) ? "default" : "pointer", opacity: (!cat || busy) ? 0.5 : 1, whiteSpace: "nowrap" }}
+          >All {vendorPending} from vendor</button>
+        )}
+      </div>
     </div>
   );
 }

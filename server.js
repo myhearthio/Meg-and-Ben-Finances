@@ -177,10 +177,17 @@ function cleanDescription(raw) {
 function normalizeVendor(raw) {
   if (!raw) return "UNKNOWN";
   let s = String(raw).toUpperCase().trim();
+  // Zelle/JPM per-payment reference codes (e.g. JPM99CCOFJLS) are unique per
+  // payment — if they survive into the vendor key, every payment to the same
+  // person becomes a "new vendor" and per-vendor learning never sticks.
+  // Strip them up front, before any matching.
+  s = s.replace(/\s+JPM[A-Z0-9]{8,}\b/g, "").trim();
   let m = s.match(/ORIG CO NAME:\s*([A-Z0-9&.\- ]+?)(?:\s+ORIG ID|\s+DESC DATE|$)/);
   if (m) return m[1].replace(/\s+/g, " ").trim();
-  m = s.match(/ZELLE PAYMENT TO\s+([A-Z][A-Z\s.'-]+?)(?:\s+JPM[A-Z0-9]+)?$/);
-  if (m) return "ZELLE: " + m[1].replace(/\s+/g, " ").trim();
+  // Name class includes digits, parens, comma, & and / so descriptions like
+  // "LESLIE (SITTER)" or "J&J LANDSCAPING" keep their full name.
+  m = s.match(/ZELLE PAYMENT TO\s+([A-Z0-9\s.,'()&\/-]+?)$/);
+  if (m) return "ZELLE: " + m[1].replace(/\s+\d{5,}\s*$/, "").replace(/\s+/g, " ").trim();
   m = s.match(/ONLINE ACH PAYMENT TO\s+([A-Z0-9 ]+?)\s*\(/);
   if (m) return m[1].replace(/\s+/g, " ").trim();
   if (/ONLINE TRANSFER TO CHK/.test(s)) return "ONLINE TRANSFER TO CHK";

@@ -53,16 +53,10 @@ async function writeMemory(m)  { await db.kvSet(MEMORY_KEY, m); }
 
 function round(n) { return Math.round(n * 100) / 100; }
 
+// Delegate to server.js so Harold's vendor keys ALWAYS match the Dashboard's
+// (CLAUDE.md rule 6). Lazy require avoids the circular import at load time.
 function normalizeVendor(s) {
-  return String(s || "")
-    .replace(/ORIG CO NAME:[^\s]+\s*/gi, "")
-    .replace(/^ZELLE[^\s]*\s*/i, "")
-    .replace(/\*+\d*$/, "")
-    .replace(/\d{7,}/g, "")
-    .replace(/\s+[A-Z]{2}\s*$/, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toUpperCase();
+  return require("./server.js").normalizeVendor(s);
 }
 
 function mkTxId(t) {

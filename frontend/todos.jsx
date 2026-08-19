@@ -1,4 +1,5 @@
 // To-Dos vertical — household ops for Ben / Megan / Marcy. Lives OUTSIDE the finance PIN gate.
+(() => {
 const { useState, useEffect, useCallback, useRef } = React;
 
 const TD_OWNERS = ["Ben", "Megan", "Marcy"];
@@ -289,3 +290,4 @@ function ProjectCard({ p, post }) {
 }
 
 Object.assign(window, { TodosView });
+})();

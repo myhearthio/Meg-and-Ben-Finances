@@ -185,6 +185,8 @@ function App() {
     return () => window.removeEventListener("app:navigate", h);
   }, [load]);
 
+  const [unlocked, setUnlocked] = useState(() => localStorage.getItem("mb_pin_ok") === "1");
+  if (!unlocked) return <PinGate onUnlock={() => { localStorage.setItem("mb_pin_ok", "1"); setUnlocked(true); }} />;
   if (err) return <ErrorScreen err={err} onRetry={() => load(true)} />;
   if (!snap) return <div className="boot-loader"><div className="boot-dot"></div><div className="boot-msg">Loading…</div></div>;
 
@@ -262,6 +264,34 @@ function TopBar({ refreshedAt, onRefresh, plaidStatus, tab, onTabChange, year, o
         <button className="refresh-btn" onClick={onRefresh}>
           {refreshedAt ? "Refreshed " + refreshedAt.toLocaleTimeString() : "Refresh"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function PinGate({ onUnlock }) {
+  const [pin, setPin] = useState("");
+  const [shake, setShake] = useState(false);
+  const press = (d) => {
+    const next = (pin + d).slice(0, 4);
+    setPin(next);
+    if (next.length === 4) {
+      if (next === "9892") onUnlock();
+      else { setShake(true); setTimeout(() => { setPin(""); setShake(false); }, 450); }
+    }
+  };
+  return (
+    <div className="pin-screen">
+      <div className="pin-brand">Meg & Ben Finance</div>
+      <div className="pin-sub">Enter code</div>
+      <div className={"pin-dots" + (shake ? " pin-shake" : "")}>
+        {[0, 1, 2, 3].map(i => <span key={i} className={"pin-dot" + (pin.length > i ? " filled" : "")}></span>)}
+      </div>
+      <div className="pin-pad">
+        {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((k, i) => (
+          k === "" ? <span key={i}></span> :
+          <button key={i} className="pin-key" onClick={() => k === "⌫" ? setPin(pin.slice(0, -1)) : press(k)}>{k}</button>
+        ))}
       </div>
     </div>
   );

@@ -206,25 +206,44 @@ function App() {
   );
 }
 
+const FINANCE_TABS = [
+  { key: "dashboard", label: "Dashboard" },
+  { key: "budget", label: "Budget & Expenses" },
+  { key: "income", label: "Income" },
+  { key: "investments", label: "Investments" },
+];
+const FINANCE_KEYS = new Set(FINANCE_TABS.map(t => t.key));
+
 function TopBar({ refreshedAt, onRefresh, plaidStatus, tab, onTabChange, year, onYearChange }) {
-  const tabs = [
-    { key: "dashboard", label: "Dashboard" },
-    { key: "budget", label: "Budget & Expenses" },
-    { key: "income", label: "Income" },
-    { key: "investments", label: "Investments" },
-    { key: "accounts", label: "Accounts" },
-    { key: "settings", label: "Settings" },
+  const inFinance = FINANCE_KEYS.has(tab);
+  const topTabs = [
+    { key: "finance", label: "Finance", active: inFinance },
+    { key: "accounts", label: "Accounts", active: tab === "accounts" },
+    { key: "settings", label: "Settings", active: tab === "settings" },
   ];
+  const goTop = (key) => {
+    if (key === "finance") onTabChange(localStorage.getItem("mb_fin_tab") || "dashboard");
+    else onTabChange(key);
+  };
+  const goSub = (key) => { localStorage.setItem("mb_fin_tab", key); onTabChange(key); };
   return (
     <div className="topbar">
       <div className="topbar-left">
         <span className="brand">Meg & Ben Finance<span className="brand-sub">family CFO</span></span>
         <div className="tabs">
-          {tabs.map(t => (
-            <div key={t.key} className={"tab" + (tab === t.key ? " active" : "")}
-                 onClick={() => onTabChange(t.key)}>{t.label}</div>
+          {topTabs.map(t => (
+            <div key={t.key} className={"tab" + (t.active ? " active" : "")}
+                 onClick={() => goTop(t.key)}>{t.label}</div>
           ))}
         </div>
+        {inFinance && (
+          <div className="tabs subtabs">
+            {FINANCE_TABS.map(t => (
+              <div key={t.key} className={"tab subtab" + (tab === t.key ? " active" : "")}
+                   onClick={() => goSub(t.key)}>{t.label}</div>
+            ))}
+          </div>
+        )}
       </div>
       <div className="topbar-right">
         <div className="year-switch">

@@ -937,6 +937,93 @@ app.post("/api/actuals/batch", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- To-Dos vertical (household ops; lives OUTSIDE the finance PIN gate) ----
+// kv key `family-todos`: { tasks:[], projects:[], seq:N }
+// Task: { id, title, type:"task"|"followup", with, priority:1|2|3, owner, due, done, doneAt, updates:[{date,text}], createdAt }
+// Project: { id, name, status:"active"|"not_started"|"done", stepsDone, stepsTotal, updates:[{date,text}], createdAt }
+const TODOS_KEY = "family-todos";
+let _todosQueue = Promise.resolve();
+function _today() { return new Date().toISOString().slice(0, 10); }
+app.get("/api/todos", async (req, res) => {
+  try {
+    const doc = (await db.kvGet(TODOS_KEY, null)) || { tasks: [], projects: [], seq: 1 };
+    res.json(doc);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Body: { ops: [...] }. Ops applied in order, one kv write. Returns the full doc.
+app.post("/api/todos", async (req, res) => {
+  const ops = (req.body && req.body.ops) || [];
+  if (!Array.isArray(ops) || ops.length === 0) return res.status(400).json({ error: "ops must be a non-empty array" });
+  const run = _todosQueue.then(async () => {
+    const doc = (await db.kvGet(TODOS_KEY, null)) || { tasks: [], projects: [], seq: 1 };
+    doc.tasks = doc.tasks || []; doc.projects = doc.projects || []; doc.seq = doc.seq || 1;
+    const findT = (id) => doc.tasks.find(t => t.id === id);
+    const findP = (id) => doc.projects.find(p => p.id === id);
+    for (const op of ops) {
+      if (op.op === "add_task") {
+        const t = op.task || {};
+        doc.tasks.push({
+          id: "t" + (doc.seq++),
+          title: String(t.title || "").slice(0, 300),
+          type: t.type === "followup" ? "followup" : "task",
+          with: String(t.with || "").slice(0, 120),
+          priority: [1, 2, 3].includes(Number(t.priority)) ? Number(t.priority) : 2,
+          owner: String(t.owner || "").slice(0, 40),
+          due: t.due || null,
+          done: false, doneAt: null,
+          updates: t.note ? [{ date: _today(), text: String(t.note).slice(0, 500) }] : [],
+          createdAt: _today(),
+        });
+      } else if (op.op === "update_task") {
+        const t = findT(op.id); if (!t) continue;
+        const p = op.patch || {};
+        if (p.title !== undefined) t.title = String(p.title).slice(0, 300);
+        if (p.priority !== undefined && [1, 2, 3].includes(Number(p.priority))) t.priority = Number(p.priority);
+        if (p.owner !== undefined) t.owner = String(p.owner).slice(0, 40);
+        if (p.due !== undefined) t.due = p.due || null;
+        if (p.with !== undefined) t.with = String(p.with).slice(0, 120);
+        if (p.type !== undefined) t.type = p.type === "followup" ? "followup" : "task";
+        if (p.done !== undefined) { t.done = !!p.done; t.doneAt = t.done ? _today() : null; }
+      } else if (op.op === "delete_task") {
+        doc.tasks = doc.tasks.filter(t => t.id !== op.id);
+      } else if (op.op === "add_update") {
+        const t = findT(op.id); if (!t) continue;
+        t.updates = t.updates || [];
+        t.updates.push({ date: _today(), text: String(op.text || "").slice(0, 500) });
+      } else if (op.op === "add_project") {
+        const p = op.project || {};
+        doc.projects.push({
+          id: "p" + (doc.seq++),
+          name: String(p.name || "").slice(0, 200),
+          status: ["active", "not_started", "done"].includes(p.status) ? p.status : "active",
+          stepsDone: Math.max(0, Number(p.stepsDone) || 0),
+          stepsTotal: Math.max(1, Number(p.stepsTotal) || 4),
+          updates: p.note ? [{ date: _today(), text: String(p.note).slice(0, 500) }] : [],
+          createdAt: _today(),
+        });
+      } else if (op.op === "update_project") {
+        const pr = findP(op.id); if (!pr) continue;
+        const p = op.patch || {};
+        if (p.name !== undefined) pr.name = String(p.name).slice(0, 200);
+        if (p.status !== undefined && ["active", "not_started", "done"].includes(p.status)) pr.status = p.status;
+        if (p.stepsDone !== undefined) pr.stepsDone = Math.max(0, Math.min(Number(p.stepsDone) || 0, pr.stepsTotal));
+        if (p.stepsTotal !== undefined) { pr.stepsTotal = Math.max(1, Number(p.stepsTotal) || 1); pr.stepsDone = Math.min(pr.stepsDone, pr.stepsTotal); }
+      } else if (op.op === "delete_project") {
+        doc.projects = doc.projects.filter(p => p.id !== op.id);
+      } else if (op.op === "add_project_update") {
+        const pr = findP(op.id); if (!pr) continue;
+        pr.updates = pr.updates || [];
+        pr.updates.push({ date: _today(), text: String(op.text || "").slice(0, 500) });
+      }
+    }
+    await db.kvSet(TODOS_KEY, doc);
+    return doc;
+  });
+  _todosQueue = run.catch(() => {});
+  try { res.json(await run); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get("/api/categories", async (req, res) => {
   try { res.json({ categories: await _readCategories() }); }
   catch (e) { res.status(500).json({ error: e.message }); }

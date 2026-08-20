@@ -947,7 +947,7 @@ function notifyHollis(task) {
   fetch("https://blt-cfo.onrender.com/api/hollis/todo-added?k=hlk_9q2v7x1m4z8r5t3w", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: task.title, due: task.due || undefined, source: "megan-ben-finance" }),
+    body: JSON.stringify({ text: task.title, due: task.due || undefined, source: "megan-ben-finance", notify_name: "Marcy", notify_phone: "6169943323" }),
   }).catch(() => {}); // fire-and-forget
 }
 let _todosQueue = Promise.resolve();

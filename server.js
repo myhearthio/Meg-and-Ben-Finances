@@ -942,6 +942,14 @@ app.post("/api/actuals/batch", async (req, res) => {
 // Task: { id, title, type:"task"|"followup", with, priority:1|2|3, owner, due, done, doneAt, updates:[{date,text}], createdAt }
 // Project: { id, name, status:"active"|"not_started"|"done", stepsDone, stepsTotal, updates:[{date,text}], createdAt }
 const TODOS_KEY = "family-todos";
+// Hollis relay (binding, per user 2026-08-20): every added to-do pings Hollis, who proposes a text to Ben's EA.
+function notifyHollis(task) {
+  fetch("https://blt-cfo.onrender.com/api/hollis/todo-added?k=hlk_9q2v7x1m4z8r5t3w", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: task.title, due: task.due || undefined, source: "megan-ben-finance" }),
+  }).catch(() => {}); // fire-and-forget
+}
 let _todosQueue = Promise.resolve();
 function _today() { return new Date().toISOString().slice(0, 10); }
 app.get("/api/todos", async (req, res) => {
@@ -974,6 +982,7 @@ app.post("/api/todos", async (req, res) => {
           updates: t.note ? [{ date: _today(), text: String(t.note).slice(0, 500) }] : [],
           createdAt: _today(),
         });
+        notifyHollis(doc.tasks[doc.tasks.length - 1]);
       } else if (op.op === "update_task") {
         const t = findT(op.id); if (!t) continue;
         const p = op.patch || {};

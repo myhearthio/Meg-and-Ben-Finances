@@ -189,7 +189,7 @@ function App() {
   }, [load]);
 
   const [unlocked, setUnlocked] = useState(() => localStorage.getItem("mb_pin_ok") === "1");
-  const isTodos = tab === "todos";
+  const isTodos = tab === "todos" || tab === "work";
   const locked = !unlocked && !isTodos;
   if (!isTodos && !locked) {
     if (err) return <ErrorScreen err={err} onRetry={() => load(true)} />;
@@ -210,7 +210,9 @@ function App() {
       {locked ? (
         <PinGate onUnlock={() => { localStorage.setItem("mb_pin_ok", "1"); setUnlocked(true); }} />
       ) : isTodos ? (
-        <TodosView />
+        tab === "work"
+          ? <TodosView list="work" owners={["Ben", "Marcy"]} kicker="Work Operations" heading="Work" />
+          : <TodosView />
       ) : (
         <React.Fragment>
           <Sidebar snap={snap} plaidStatus={plaidStatus} onPlaidChanged={() => load(true)} />
@@ -233,7 +235,8 @@ const FINANCE_KEYS = new Set(FINANCE_TABS.map(t => t.key));
 function TopBar({ refreshedAt, onRefresh, plaidStatus, tab, onTabChange, year, onYearChange }) {
   const inFinance = FINANCE_KEYS.has(tab);
   const topTabs = [
-    { key: "todos", label: "To-Dos", active: tab === "todos" },
+    { key: "todos", label: "Home", active: tab === "todos" },
+    { key: "work", label: "Work", active: tab === "work" },
     { key: "finance", label: "Finance", active: inFinance },
     { key: "accounts", label: "Accounts", active: tab === "accounts" },
     { key: "settings", label: "Settings", active: tab === "settings" },
@@ -262,7 +265,7 @@ function TopBar({ refreshedAt, onRefresh, plaidStatus, tab, onTabChange, year, o
           </div>
         )}
       </div>
-      {tab !== "todos" && <div className="topbar-right">
+      {tab !== "todos" && tab !== "work" && <div className="topbar-right">
         <div className="year-switch">
           {[2025, 2026].map(y => (
             <button

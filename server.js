@@ -942,19 +942,21 @@ app.post("/api/actuals/batch", async (req, res) => {
 // Task: { id, title, type:"task"|"followup", with, priority:1|2|3, owner, due, done, doneAt, updates:[{date,text}], createdAt }
 // Project: { id, name, status:"active"|"not_started"|"done", stepsDone, stepsTotal, updates:[{date,text}], createdAt }
 const TODOS_KEY = "family-todos";
+const WORK_TODOS_KEY = "work-todos"; // Marcy's work vertical — separate doc, same op shapes
+function _todosKey(req) { return req.query.list === "work" ? WORK_TODOS_KEY : TODOS_KEY; }
 // Hollis relay (binding, per user 2026-08-20): every added to-do pings Hollis, who proposes a text to Ben's EA.
 function notifyHollis(task) {
   fetch("https://blt-cfo.onrender.com/api/hollis/todo-added?k=hlk_9q2v7x1m4z8r5t3w", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: task.title, due: task.due || undefined, source: "megan-ben-finance", notify_name: "Marcy", notify_phone: "6169943323" }),
+    body: JSON.stringify({ text: task.title, due: task.due || undefined, source: "megan-ben-finance" + (task._list === "work" ? " (work)" : ""), notify_name: "Marcy", notify_phone: "6169943323" }),
   }).catch(() => {}); // fire-and-forget
 }
 let _todosQueue = Promise.resolve();
 function _today() { return new Date().toISOString().slice(0, 10); }
 app.get("/api/todos", async (req, res) => {
   try {
-    const doc = (await db.kvGet(TODOS_KEY, null)) || { tasks: [], projects: [], seq: 1 };
+    const doc = (await db.kvGet(_todosKey(req), null)) || { tasks: [], projects: [], seq: 1 };
     res.json(doc);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -962,8 +964,10 @@ app.get("/api/todos", async (req, res) => {
 app.post("/api/todos", async (req, res) => {
   const ops = (req.body && req.body.ops) || [];
   if (!Array.isArray(ops) || ops.length === 0) return res.status(400).json({ error: "ops must be a non-empty array" });
+  const listKey = _todosKey(req);
+  const listName = req.query.list === "work" ? "work" : "home";
   const run = _todosQueue.then(async () => {
-    const doc = (await db.kvGet(TODOS_KEY, null)) || { tasks: [], projects: [], seq: 1 };
+    const doc = (await db.kvGet(listKey, null)) || { tasks: [], projects: [], seq: 1 };
     doc.tasks = doc.tasks || []; doc.projects = doc.projects || []; doc.seq = doc.seq || 1;
     const findT = (id) => doc.tasks.find(t => t.id === id);
     const findP = (id) => doc.projects.find(p => p.id === id);
@@ -982,7 +986,7 @@ app.post("/api/todos", async (req, res) => {
           updates: t.note ? [{ date: _today(), text: String(t.note).slice(0, 500) }] : [],
           createdAt: _today(),
         });
-        notifyHollis(doc.tasks[doc.tasks.length - 1]);
+        notifyHollis({ ...doc.tasks[doc.tasks.length - 1], _list: listName });
       } else if (op.op === "update_task") {
         const t = findT(op.id); if (!t) continue;
         const p = op.patch || {};
@@ -1025,7 +1029,7 @@ app.post("/api/todos", async (req, res) => {
         pr.updates.push({ date: _today(), text: String(op.text || "").slice(0, 500) });
       }
     }
-    await db.kvSet(TODOS_KEY, doc);
+    await db.kvSet(listKey, doc);
     return doc;
   });
   _todosQueue = run.catch(() => {});

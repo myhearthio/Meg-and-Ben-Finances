@@ -17,7 +17,7 @@ function tdIsHot(due) {
   return diff <= 7;
 }
 
-function TodosView() {
+function TodosView({ list = "home", owners = TD_OWNERS, kicker = "Household Operations", heading = "To-Dos" }) {
   const [doc, setDoc] = useState(null);
   const [err, setErr] = useState(null);
   const [ownerFilter, setOwnerFilter] = useState("All");
@@ -27,23 +27,23 @@ function TodosView() {
 
   const load = useCallback(async () => {
     try {
-      const d = await fetch("/api/todos").then(r => r.json());
+      const d = await fetch("/api/todos?list=" + list).then(r => r.json());
       if (d.error) throw new Error(d.error);
       setDoc(d); setErr(null);
     } catch (e) { setErr(e.message); }
-  }, []);
+  }, [list]);
   useEffect(() => { load(); }, [load]);
 
   const post = useCallback(async (ops) => {
     try {
-      const d = await fetch("/api/todos", {
+      const d = await fetch("/api/todos?list=" + list, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ops }),
       }).then(r => r.json());
       if (d.error) throw new Error(d.error);
       setDoc(d);
     } catch (e) { setErr(e.message); }
-  }, []);
+  }, [list]);
 
   if (err) return <div className="todos"><div className="td-wrap"><div style={{ padding: 40 }}>Error: {err} <button className="td-btn" onClick={load}>Retry</button></div></div></div>;
   if (!doc) return <div className="todos"><div className="td-wrap"><div className="td-mono" style={{ padding: 40 }}>Loading…</div></div></div>;
@@ -75,10 +75,10 @@ function TodosView() {
       <div className="td-wrap">
         <header className="td-head">
           <div>
-            <div className="td-mono td-teal" style={{ marginBottom: 6 }}>Household Operations</div>
-            <h1 className="td-h1">To-Dos</h1>
+            <div className="td-mono td-teal" style={{ marginBottom: 6 }}>{kicker}</div>
+            <h1 className="td-h1">{heading}</h1>
           </div>
-          <div className="td-mono td-muted">Ben · Megan · Marcy</div>
+          <div className="td-mono td-muted">{owners.join(" · ")}</div>
         </header>
         <div className="td-bar">
           <div className="td-f"><div className="td-n"><em>{counts.open}</em></div><div className="td-mono td-muted">Open</div></div>
@@ -87,7 +87,7 @@ function TodosView() {
           <div className="td-f"><div className="td-n">{counts.doneWeek}</div><div className="td-mono td-muted">Done this week</div></div>
         </div>
         <div className="td-controls td-mono">
-          {["All", ...TD_OWNERS].map(o => (
+          {["All", ...owners].map(o => (
             <button key={o} className={"td-chip" + (ownerFilter === o ? " on" : "")} onClick={() => setOwnerFilter(o)}>{o}</button>
           ))}
           <span className="td-vr"></span>
@@ -95,20 +95,20 @@ function TodosView() {
           <button className={"td-chip" + (sortMode === "new" ? " on" : "")} onClick={() => setSortMode("new")}>Newest</button>
           <button className="td-add" onClick={() => setAdding(a => !a)}>{adding ? "Close" : "+ New task"}</button>
         </div>
-        {adding && <NewTaskForm post={post} onDone={() => setAdding(false)} />}
+        {adding && <NewTaskForm post={post} owners={owners} onDone={() => setAdding(false)} />}
         <section>
           <div className="td-sec-h"><span className="td-mono">Master To-Do</span><span className="td-mono td-muted">{sorted.length} open</span></div>
           <div className="td-legend td-mono td-muted"><span className="td-c-tick"></span><span className="td-c-task">Task / latest update</span><span className="td-c-pri">Priority</span><span className="td-c-own">Owner</span><span className="td-c-due">Due</span><span className="td-c-x"></span></div>
-          {sorted.map(t => <TaskRow key={t.id} t={t} post={post} />)}
+          {sorted.map(t => <TaskRow key={t.id} t={t} post={post} owners={owners} />)}
           {sorted.length === 0 && <div className="td-empty td-mono td-muted">Nothing open{ownerFilter !== "All" ? " for " + ownerFilter : ""}.</div>}
-          {doneShown.map(t => <TaskRow key={t.id} t={t} post={post} />)}
+          {doneShown.map(t => <TaskRow key={t.id} t={t} post={post} owners={owners} />)}
           {doneTasks.length > 5 && (
             <div style={{ padding: "12px 0" }}><a className="td-mono td-link" onClick={() => setShowAllDone(s => !s)}>{showAllDone ? "Show fewer done" : `View all ${doneTasks.length} done →`}</a></div>
           )}
         </section>
         <section>
           <div className="td-sec-h"><span className="td-mono">Follow-ups</span><span className="td-mono td-muted">Waiting on someone else</span></div>
-          {followups.map(t => <TaskRow key={t.id} t={t} post={post} followup />)}
+          {followups.map(t => <TaskRow key={t.id} t={t} post={post} owners={owners} followup />)}
           {followups.length === 0 && <div className="td-empty td-mono td-muted">No open follow-ups.</div>}
         </section>
         <ProjectsSection projects={projects} post={post} />
@@ -117,7 +117,7 @@ function TodosView() {
   );
 }
 
-function TaskRow({ t, post, followup }) {
+function TaskRow({ t, post, owners = TD_OWNERS, followup }) {
   const [noting, setNoting] = useState(false);
   const [note, setNote] = useState("");
   const latest = (t.updates || [])[t.updates ? t.updates.length - 1 : 0];
@@ -154,7 +154,7 @@ function TaskRow({ t, post, followup }) {
         <select className="td-sel td-own" value={t.owner || ""} disabled={t.done}
           onChange={e => post([{ op: "update_task", id: t.id, patch: { owner: e.target.value } }])}>
           <option value="">—</option>
-          {TD_OWNERS.map(o => <option key={o} value={o}>{o}</option>)}
+          {owners.map(o => <option key={o} value={o}>{o}</option>)}
         </select>
       </span>
       <span className="td-c-due">
@@ -172,11 +172,11 @@ function TaskRow({ t, post, followup }) {
   );
 }
 
-function NewTaskForm({ post, onDone }) {
+function NewTaskForm({ post, owners = TD_OWNERS, onDone }) {
   const [title, setTitle] = useState("");
   const [type, setType] = useState("task");
   const [priority, setPriority] = useState(2);
-  const [owner, setOwner] = useState("Ben");
+  const [owner, setOwner] = useState(owners[0]);
   const [due, setDue] = useState("");
   const [withWho, setWithWho] = useState("");
   const save = () => {
@@ -199,7 +199,7 @@ function NewTaskForm({ post, onDone }) {
           {[3, 2, 1].map(p => <option key={p} value={p}>{TD_PRI[p]}</option>)}
         </select>
         <select className="td-sel-box" value={owner} onChange={e => setOwner(e.target.value)}>
-          {TD_OWNERS.map(o => <option key={o} value={o}>{o}</option>)}
+          {owners.map(o => <option key={o} value={o}>{o}</option>)}
         </select>
         <input type="date" className="td-sel-box" value={due} onChange={e => setDue(e.target.value)} />
         <button className="td-add" onClick={save}>Add</button>

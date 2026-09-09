@@ -105,6 +105,20 @@ When you change something material, append a dated note at the bottom.
 
 ## Session notes
 
+### 2026-09-09 — Assistant's card 0328 added + Plaid item dedupe (IMPORTANT)
+- User noticed household spend was missing: his assistant's Chase card (mask **0328**, Plaid name "Zach Checking", type credit) was never in the app. It carries real family expenses — Mosquito Joe, JR Landscaping, Comcast, Full Circle Pilates, Choice Sitter Solutions, TaskRabbit, Crate & Barrel, Amazon. ~$1–2k/mo that had been invisible.
+- Two causes, both fixed:
+  1. **Not in the allow-list.** Added "0328" to `ALLOWED_MASKS` in `gatherSnapshot()` (server.js). Personal masks are now 0485, 5538, 6002, 4547, 0328.
+  2. **Not linked in Plaid at all.** Diagnosed with a new endpoint `GET /api/debug/raw-accounts` — lists EVERY account Plaid returns BEFORE the allow-list filter. Use this first whenever the user says an account is missing; it separates "filtered out" from "never linked."
+- **Re-linking Chase created a SECOND Plaid Item** carrying the same accounts (0485/5538/5706/7500) → every Ben transaction would have been double-counted. New guard in `gatherSnapshot()`, applied BEFORE the allow-list:
+  - **One Item owns each mask; the item that linked it FIRST wins.** Built from `plaid.getItems()` `added_at` + the `__plaid_item_id` annotation that `plaid.js` already puts on accounts and tx.
+  - A newly linked Item therefore only contributes masks no existing Item provides — which is exactly how 0328 got in while the dupes were dropped.
+  - **Do NOT dedupe by deleting an Item.** Plaid transaction_ids are per-item; removing an item orphans every per-tx override and approval keyed to them (would have dumped 275 income approvals + all expense per-tx picks back into the queue).
+- Verified live: each mask appears exactly once in `cash_accounts`, 0 exact-duplicate transactions across 0485/5538/0328, 0328 pulling 99 tx.
+- Aftermath: approval queue went from ~2 → **80 pending** (new 0328 vendors). Vendors with existing rules (Comcast, Mosquito Joe) auto-categorized. User works the queue down manually.
+- Note: 4547 (Megan credit) is CSV-only, shows $0 balance — not a Plaid account. Expected.
+- Deploys: `d8a129f` (allow-list + raw-accounts debug), `042ef59` (item dedupe).
+
 ### 2026-04-30 — Multi-year support + Harold-Dashboard reconciliation rule
 - Added 24-month Plaid pull (was YTD-only). All transaction tools (`get_top_expenses`, `find_transactions`, `get_vendor_total`, `get_category_breakdown`, `get_forecast_vs_actual`) now accept optional `year` param. System prompt updated.
 - BUG that triggered the rule: Harold quoted $1,141,020 as 2025 total expenses. User said wrong, told me to use the Dashboard number. I'd been reconciling tools in a silo against my own math, not against what the user actually sees on the Dashboard.
@@ -197,3 +211,56 @@ When you change something material, append a dated note at the bottom.
 - Architecture stays the same; `data.js` becomes the DB layer. Three tables planned: `vendor_overrides`, `tx_overrides`, `forecast` (and possibly `tx_descriptions`).
 - User explicitly does **not** want me to keep "fixing" categorization by re-running scripts. Get the storage right; the data will stay.
 - Created CLAUDE.md (this file) so future chats start informed.
+
+### 2026-08-18 — Vendor normalizer fix + bulk learning session
+- Root cause of "asked about Leslie 15 times": Zelle descriptions carry a unique per-payment JPM reference code (e.g. `JPM99CCOFJLS`) and the old Zelle regex in `normalizeVendor` failed on names with parens ("LESLIE (SITTER)"), so EVERY payment became its own vendor — learning could never stick. 35 fragmented Zelle vendor keys existed.
+- Fix in `server.js normalizeVendor`: strip `\s+JPM[A-Z0-9]{8,}` up front; Zelle name class broadened to include digits/parens/comma/&/slash. `tools.js` normalizeVendor now DELEGATES to server's (lazy require) so Harold's vendor keys always match the Dashboard (rule 6).
+- New endpoint `POST /api/actuals/batch` — same op shapes as `/api/actuals`, applied in ONE kv write. Vendor ops clear stale per-tx overrides; tx ops in the same batch apply AFTER the clear (vendor rule + per-tx exceptions in one call). Use this for any bulk work — individual POSTs are too slow to loop (each triggers snapshot invalidation; scripts timed out).
+- Learning migration run: captured all pre-change categorizations (backup: `migration_precapture.json` in the design project), then promoted 245 vendors to vendor-level rules (unanimous ≥2 txs, or dominant ≥75% with n≥3 — minority txs kept as per-tx exceptions), restored 13 per-tx exceptions, set 52 income vendor suggestions.
+- ⚠️ Gotcha hit: `POST /api/income/batch` vendor ops CLEAR per-tx income overrides — but income is strict (userSet = txCat only), so that un-approved 275 deposits. Restored them from the backup in the same session. If setting income vendor suggestions in bulk again, re-post the per-tx approvals afterward.
+- Verified: 0 category mismatches vs. pre-migration, 0 approval regressions (expenses + income), Leslie = one vendor "ZELLE: LESLIE (SITTER)" with a childcare_babysitters rule (1 excluded exception preserved), 2026 queue down to 2 pending, 558 vendors have saved rules.
+- Deploys: `d4d1b6b` (normalizer), `11304f5` (batch endpoint).
+
+### 2026-08-18 — Expense Approve no longer writes vendor rules
+- Bug report: "list disappears entirely when categorizing." Cause: every Approve click in the expense queue ALSO posted a vendor-level override; since `_buildActuals` marks any tx with a vendor override as userSet, all other pending tx from that vendor left the queue at once. One Venmo approve wiped dozens of rows — looked like data loss.
+- Fix (frontend/app.jsx only, no server change): `approveTxOptimistic` and `moveTx` now post per-tx overrides ONLY. Vendor-wide categorization is an explicit "All N from vendor" button on each queue row (`approveVendorOptimistic` → posts vendor_key, server clears stale per-tx overrides per the 2026-04-29 rule).
+- Existing vendor overrides untouched — historical auto-categorization still stands; only NEW approvals stopped cascading.
+- Deploy: commit `75f562d`, verified via /api/version.
+
+### 2026-08-21 — Work vertical (Marcy)
+- Second to-do list: top-level tabs are now **Home | Work | Finance | Accounts | Settings**. Work is near-identical to Home but owners = Ben/Marcy only, kicker "Work Operations", heading "Work". Both outside the PIN gate.
+- Backend: same `/api/todos` endpoints take `?list=work` (GET and POST) → kv key `work-todos`; default (no param) stays `family-todos`. Same op shapes. Hollis ping fires for work adds too, source tagged "megan-ben-finance (work)".
+- Frontend: `TodosView` parameterized ({list, owners, kicker, heading}); app.jsx renders two instances.
+- Deploy: commit `416cd6b`, verified via /api/version.
+
+### 2026-08-20 — Hollis relay
+- Marcy (Ben's EA/PA) cell: 616-994-3323 — texts to her are sent by Hollis (other project), not this app.
+- Every `add_task` in `/api/todos` fires a fire-and-forget POST to Hollis (separate project, blt-cfo.onrender.com `/api/hollis/todo-added?k=…`) with `{text, due, source:"megan-ben-finance", notify_name:"Marcy", notify_phone:"6169943323"}` — number included in every ping because Hollis kept getting confused about it. Hollis (has text access) then proposes a text to Ben's EA (Marcy) — copilot mode, Ben approves each text. Relay key lives inline in `notifyHollis()` in server.js.
+- Failures are swallowed (`.catch(()=>{})`) — a Hollis outage never blocks task adds.
+- Deploy: commit `bb52b98`.
+
+### 2026-08-19 — To-Dos vertical shipped
+- New top-level **To-Dos** tab, OUTSIDE the PIN gate (Marcy can use it without seeing finances; locked devices default to it). Finance/Accounts/Settings still need the code — PinGate now renders in the content area under the TopBar.
+- Design: teal #17505E on limestone #F0EFEA, IBM Plex Mono letterspaced labels + Hanken Grotesk, 0 radius, hairline rules (all `td-` classes in styles.css).
+- Features: tasks with editable priority (3/2/1 select), owner (Ben/Megan/Marcy select), due date (date input), done tick (logged with date, strikethrough, kept in list), dated update notes ("+ Update"), delete ×; owner filters + High-first/Newest sort; counts bar; Follow-ups (type "followup", `with` field); Projects (status, clickable step meter, ± steps total, updates).
+- Backend: kv key `family-todos` `{tasks, projects, seq}`; `GET /api/todos`; `POST /api/todos {ops:[...]}` — op-based (add_task, update_task, delete_task, add_update, add_project, update_project, delete_project, add_project_update), serialized via queue, one kv write per request.
+- Frontend: new `frontend/todos.jsx` (window.TodosView), loaded before app.jsx in frontend/index.html; fonts Hanken Grotesk + IBM Plex Mono added.
+- Seeded 24 tasks (16 open, 8 done) from the family's Google-Doc master list screenshot. Owners left blank for user to assign.
+- Gotcha fixed: todos.jsx and app.jsx are separate Babel scripts but share GLOBAL scope — both destructured `const { useState } = React` → "Identifier already declared", nothing rendered (page stuck on static boot loader). Fix: todos.jsx wrapped in IIFE, exports via `Object.assign(window, { TodosView })`. Any future frontend file must do the same.
+- Deploy: commit `1b4dd73`, fix `61c18eb`, verified via /api/version.
+
+### 2026-08-19 — PIN gate
+- Whole app now sits behind a 4-digit code (**9892**, hardcoded in `PinGate` in frontend/app.jsx). Correct entry remembered per device via localStorage `mb_pin_ok`. Client-side only — a light lock, not real auth; when the To-dos vertical ships, To-dos should live OUTSIDE the gate so Marcy (PA) can use it without seeing finances.
+- Deploy: commit `682e920`, verified via /api/version.
+
+### 2026-08-19 — Nav grouped under Finance tab
+- Top bar now: **Finance | Accounts | Settings**. Finance is a group holding sub-tabs Dashboard / Budget & Expenses / Income / Investments (second tab row appears when in the group). Tab keys unchanged, so routing, Harold's `app:navigate`, and `mb_tab` localStorage all still work; last finance sub-tab remembered in `mb_fin_tab`.
+- Motivation: making room for new top-level verticals (a To-dos vertical is planned next).
+- Files: `frontend/app.jsx` (TopBar), `frontend/styles.css` (.subtabs). Deploy: commit `1c0348a`, verified via /api/version.
+
+### 2026-06-04 — Budget & Expenses blank-screen crash fixed
+- Symptom: clicking "Budget & Expenses" showed a blank screen (React component crashed on render).
+- Root cause: in `BudgetCurrentYear` (frontend/app.jsx), `const mergedByCategory` was declared AFTER the code that used it. `rawActual()` reads `mergedByCategory`, and `actualGrand` calls `rawActual()` for every category — running synchronously during render, before the `const` line executed. That's a temporal-dead-zone `ReferenceError: Cannot access 'mergedByCategory' before initialization`, which crashed the whole Budget tab. No error boundary, so the screen just went blank.
+- Fix: moved the `mergedByCategory` IIFE declaration UP, above `rawActual`/`actualByCat`/`actualGrand`. One declaration only now.
+- Lesson: `const`/`let` are NOT hoisted like `var` — using one before its declaration line throws, even inside a closure that's called later in the same render. Declare derived values before the code that consumes them.
+- Deploy: commit `f46c0c5`, verified live via `/api/version`.

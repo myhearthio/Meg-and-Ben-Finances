@@ -232,9 +232,10 @@ async function gatherSnapshot(year) {
   // through Plaid) is filtered out before snapshot building. Family CFO is for
   // personal finances only — business accounts must never appear in Income,
   // Expenses, the Approval Queue, KPIs, or the sidebar.
-  // 0485 Ben checking, 5538 Ben credit, 6002 Megan checking, 4547 Megan credit.
+  // 0485 Ben checking, 5538 Ben credit, 6002 Megan checking, 4547 Megan credit,
+  // 0328 assistant credit card (household spend: landscaping, sitters, Comcast, etc).
   // Excluded: 5814 (dupe of 5538), 5706 (ignore), 7500 (business).
-  const ALLOWED_MASKS = new Set(["0485", "5538", "6002", "4547"]);
+  const ALLOWED_MASKS = new Set(["0485", "5538", "6002", "4547", "0328"]);
   accounts = accounts.filter(a => ALLOWED_MASKS.has(a.mask));
   plaidTx = plaidTx.filter(t => ALLOWED_MASKS.has(t.account_mask));
 
@@ -1241,6 +1242,22 @@ app.get("/api/version", (req, res) => {
     branch: process.env.RENDER_GIT_BRANCH || "main",
     booted_at: BOOT_TIME,
   });
+});
+
+// Lists EVERY account Plaid is handing us, before the allow-list filter.
+// Use this to confirm a card is actually linked.
+app.get("/api/debug/raw-accounts", async (req, res) => {
+  try {
+    await plaid.ensureTokenLoaded();
+    const accts = await plaid.getAccounts();
+    res.json({
+      count: accts.length,
+      accounts: accts.map(a => ({
+        mask: a.mask, name: a.name, official_name: a.official_name,
+        type: a.type, subtype: a.subtype, balance: a.balances && a.balances.current,
+      })),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get("/api/debug/find", async (req, res) => {

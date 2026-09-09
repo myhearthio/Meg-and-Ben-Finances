@@ -227,6 +227,29 @@ async function gatherSnapshot(year) {
     }
   }
 
+  // ---- One Plaid Item owns each account mask ----
+  // Re-linking a bank creates a SECOND Item that returns the same accounts, which
+  // would double-count every transaction. Rule: for a given mask, the item that
+  // linked it FIRST owns it. A newly linked item only contributes masks no
+  // existing item already provides (that's how a genuinely new card gets in).
+  // Never dedupe by deleting an Item — Plaid transaction ids are per-item, and
+  // dropping an item orphans every per-tx override and approval keyed to them.
+  const itemAddedAt = {};
+  try {
+    for (const it of (plaid.getItems() || [])) itemAddedAt[it.item_id] = it.added_at || "";
+  } catch (e) { console.log("plaid items err:", e.message); }
+  const ownerByMask = {};
+  for (const a of accounts) {
+    const m = a.mask, it = a.__plaid_item_id;
+    if (!m || !it) continue;
+    const prev = ownerByMask[m];
+    if (!prev || (itemAddedAt[it] || "") < (itemAddedAt[prev] || "")) ownerByMask[m] = it;
+  }
+  const ownsMask = o => !o.__plaid_item_id || !ownerByMask[o.mask || o.account_mask]
+    || ownerByMask[o.mask || o.account_mask] === o.__plaid_item_id;
+  accounts = accounts.filter(ownsMask);
+  plaidTx = plaidTx.filter(ownsMask);
+
   // ---- Personal-accounts allow-list ----
   // Hardcoded. Anything not in this list (e.g. business accounts the user re-linked
   // through Plaid) is filtered out before snapshot building. Family CFO is for

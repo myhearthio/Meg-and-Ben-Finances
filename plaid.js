@@ -90,6 +90,10 @@ async function createLinkToken(redirectUri) {
     user: { client_user_id: "meg-and-ben" },
     client_name: "Meg and Ben Finance",
     products: ["transactions"],
+    // Ask for the full 24 months up front. Without this Plaid's initial pull for a
+    // NEW Item is ~90 days, which is why the 2026-09 Chase re-link only had history
+    // back to June.
+    transactions: { days_requested: 730 },
     country_codes: ["US"],
     language: "en",
   };
@@ -132,11 +136,16 @@ async function getAccounts() {
       }
       all.push(...r.data.accounts);
     } catch (e) {
-      console.log(`[plaid] accountsGet err for item ${it.item_id} (${it.institution_name}):`, e.message);
+      const detail = e.response && e.response.data ? JSON.stringify(e.response.data) : e.message;
+      lastErrors[it.item_id] = { when: new Date().toISOString(), call: "accountsGet", error: detail };
+      console.log(`[plaid] accountsGet err for item ${it.item_id} (${it.institution_name}):`, detail);
     }
   }
   return all;
 }
+// Last Plaid error per item (accountsGet / transactionsGet). Surfaced by /api/debug/item-coverage.
+const lastErrors = {};
+function getLastErrors() { return lastErrors; }
 
 async function getYTDTransactions() {
   await _loadItems();
@@ -172,7 +181,9 @@ async function getYTDTransactions() {
       }
       all.push(...itemTxs);
     } catch (e) {
-      console.log(`[plaid] transactionsGet err for item ${it.item_id} (${it.institution_name}):`, e.message);
+      const detail = e.response && e.response.data ? JSON.stringify(e.response.data) : e.message;
+      lastErrors[it.item_id] = { when: new Date().toISOString(), call: "transactionsGet", error: detail };
+      console.log(`[plaid] transactionsGet err for item ${it.item_id} (${it.institution_name}):`, detail);
     }
   }
   return all;
@@ -188,5 +199,5 @@ async function setToken(tok) {
 module.exports = {
   getToken, ensureTokenLoaded, setToken,
   getItems, addItem, removeItem,
-  createLinkToken, exchange, getAccounts, getYTDTransactions,
+  createLinkToken, exchange, getAccounts, getYTDTransactions, getLastErrors,
 };

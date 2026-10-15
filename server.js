@@ -1313,7 +1313,8 @@ app.get("/api/debug/item-coverage", async (req, res) => {
       c.total++; if (!c.min || t.date < c.min) c.min = t.date; if (!c.max || t.date > c.max) c.max = t.date;
       if (t.date >= from && t.date <= to) c.in_window++;
     }
-    const items = plaid.getItems().map(it => ({ item_id: it.item_id, name: it.institution_name, added_at: it.added_at }));
+    const errs = plaid.getLastErrors ? plaid.getLastErrors() : {};
+    const items = plaid.getItems().map(it => ({ item_id: it.item_id, name: it.institution_name, added_at: it.added_at, last_error: errs[it.item_id] || null }));
     res.json({ items, window: { from, to }, coverage: cov });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

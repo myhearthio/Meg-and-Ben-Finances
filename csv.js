@@ -117,6 +117,35 @@ async function saveCsv(mask, csvText, kind) {
   cache.set(mask, { csv: csvText, kind: kind || cache.get(mask)?.kind || null });
 }
 
+// Merge a new CSV into the stored one for this mask instead of replacing it.
+// Keeps every existing line; appends only new data lines whose
+// (date, amount, description) fingerprint isn't already present. Falls back to
+// replace when there is no existing CSV or the formats differ.
+// Returns { csvText, added, mode }.
+function mergeCsv(mask, newText) {
+  const existing = cache.get(mask)?.csv;
+  if (!existing) return { csvText: newText, added: null, mode: "replace" };
+  const a = parseChaseCsv(existing, mask), b = parseChaseCsv(newText, mask);
+  if (!a.format || a.format !== b.format) return { csvText: newText, added: null, mode: "replace" };
+  const fp = t => t.date + "|" + Number(t.amount).toFixed(2) + "|" + t.name.replace(/\s+/g, " ").trim().toUpperCase();
+  const seen = new Set(a.transactions.map(fp));
+  // Walk the raw lines of the new CSV in parallel with its parsed rows so we
+  // append the original text verbatim.
+  const newLines = newText.split(/\r?\n/).filter(l => l.trim().length > 0);
+  const keep = [];
+  let pi = 0;
+  for (let i = 1; i < newLines.length; i++) {
+    const one = parseChaseCsv(newLines[0] + "\n" + newLines[i], mask).transactions[0];
+    if (!one) continue;
+    pi++;
+    const k = fp(one);
+    if (seen.has(k)) continue;
+    seen.add(k); keep.push(newLines[i]);
+  }
+  const merged = existing.replace(/\s+$/, "") + (keep.length ? "\n" + keep.join("\n") : "") + "\n";
+  return { csvText: merged, added: keep.length, mode: "merge" };
+}
+
 function getKind(mask) {
   return cache.get(mask)?.kind || null;
 }
@@ -145,4 +174,4 @@ function stitch(csvTx, plaidTx) {
   return merged;
 }
 
-module.exports = { prime, parseChaseCsv, saveCsv, loadCsvTx, hasCsv, listMasks, getKind, stitch };
+module.exports = { prime, parseChaseCsv, saveCsv, mergeCsv, loadCsvTx, hasCsv, listMasks, getKind, stitch };

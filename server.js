@@ -493,10 +493,14 @@ app.post("/api/upload/csv", express.text({ type: "*/*", limit: "25mb" }), async 
     }
     const parsed = csv.parseChaseCsv(csvText, mask);
     if (!parsed.format) return res.status(400).json({ error: parsed.error || "unrecognized CSV format" });
-    await csv.saveCsv(mask, csvText, kind);
+    // Merge into any existing CSV for this mask (partial-range uploads fill gaps
+    // without wiping earlier history). ?mode=replace forces a full overwrite.
+    const merged = req.query.mode === "replace" ? { csvText, added: null, mode: "replace" } : csv.mergeCsv(mask, csvText);
+    await csv.saveCsv(mask, merged.csvText, kind);
     invalidateCache();
     res.json({
       ok: true, mask, kind, format: parsed.format, count: parsed.transactions.length,
+      mode: merged.mode, added: merged.added,
       date_range: {
         min: parsed.transactions.reduce((m, t) => !m || t.date < m ? t.date : m, null),
         max: parsed.transactions.reduce((m, t) => !m || t.date > m ? t.date : m, null),

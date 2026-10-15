@@ -105,6 +105,21 @@ When you change something material, append a dated note at the bottom.
 
 ## Session notes
 
+### 2026-10-15 — Plaid history hole found + CSV gap-fill (IMPORTANT)
+- Ben's income looked wrong vs. BLT app (`blt-cfo.onrender.com/api/snapshot` → `owner_payouts_ytd.ben` = $586,866). Root cause: **0485 and 5538 had zero data Apr 27 → Jun 11, 2026.**
+  - Both older Chase Plaid Items (`legacy`, `rO88J7XK…`) are **dead** — `ITEM_LOGIN_REQUIRED / OAUTH_INVALID_TOKEN` (Chase revokes prior grants when the same login is re-linked). They return nothing.
+  - The 2026-09-09 Chase Item only had Plaid's default ~90 days (from Jun 11). `createLinkToken` now requests `transactions.days_requested: 730` — applies to FUTURE links only.
+  - Everything before Jun 11 for Ben's accounts comes from the April CSV uploads (ended Apr 27). So: CSV end → Plaid start = the hole.
+- Fixes shipped:
+  - `POST /api/upload/csv` now **merges** into the existing CSV for a mask (fingerprint date|amount|desc; `csv.mergeCsv`). `?mode=replace` forces overwrite. Partial-range uploads are safe.
+  - `GET /api/debug/item-coverage?from=&to=` — per-Item/per-mask tx counts + min/max dates + last Plaid error. Use this FIRST for any "data missing" report.
+  - `gatherSnapshot` gap-fills owner-Item tx from non-owner Items by fingerprint (harmless now; useful if two live Items overlap).
+  - `plaid.getLastErrors()` captures per-item errors.
+- User uploaded: 0485 (two files, credits + debits, May–Jun), 5538 (three files, Apr 6 → Jul 5). 7500→0485 now 13 transfers = $586,866.05, matches BLT exactly.
+- Remaining: 0485 Apr 28–30 still blank (3 days). Approval queue ~104 pending after the backfill. Dead Plaid items left in place (no live tx ids depend on them; removing is safe if error noise bothers).
+- Open decision: should Ben's income = BLT payouts (pull from blt-cfo) or personal deposits? Ben bucket currently also includes 4833 transfers (~$75k) — user hasn't said what 4833 is.
+- Deploys: `3799fce`, `71d0ba3`, `c3a8a42`.
+
 ### 2026-09-09 — Assistant's card 0328 added + Plaid item dedupe (IMPORTANT)
 - User noticed household spend was missing: his assistant's Chase card (mask **0328**, Plaid name "Zach Checking", type credit) was never in the app. It carries real family expenses — Mosquito Joe, JR Landscaping, Comcast, Full Circle Pilates, Choice Sitter Solutions, TaskRabbit, Crate & Barrel, Amazon. ~$1–2k/mo that had been invisible.
 - Two causes, both fixed:

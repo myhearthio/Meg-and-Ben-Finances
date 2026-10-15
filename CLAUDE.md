@@ -118,6 +118,7 @@ When you change something material, append a dated note at the bottom.
 - User uploaded: 0485 (two files, credits + debits, May–Jun), 5538 (three files, Apr 6 → Jul 5). 7500→0485 now 13 transfers = $586,866.05, matches BLT exactly.
 - Remaining: 0485 Apr 28–30 still blank (3 days). Approval queue ~104 pending after the backfill. Dead Plaid items left in place (no live tx ids depend on them; removing is safe if error noise bothers).
 - Open decision: should Ben's income = BLT payouts (pull from blt-cfo) or personal deposits? Ben bucket currently also includes 4833 transfers (~$75k) — user hasn't said what 4833 is.
+- RESOLVED same day: 4833 transfers → Excluded (vendor rule, both years). Ben 2026 = $602k ($586,866 BLT + ~$13k misc). User accepted. 4833 is one of Ben's own accounts.
 - Deploys: `3799fce`, `71d0ba3`, `c3a8a42`.
 
 ### 2026-09-09 — Assistant's card 0328 added + Plaid item dedupe (IMPORTANT)

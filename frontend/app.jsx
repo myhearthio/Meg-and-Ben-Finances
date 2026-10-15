@@ -663,6 +663,9 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
   const [optimisticTx, setOptimisticTx] = useState({});
   const toggle = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
   const toggleVendor = (vk) => setExpandedVendors(e => ({ ...e, [vk]: !e[vk] }));
+  // Expand / collapse every category at once (shows every vendor line item).
+  const allOpen = FAMILY_CATS.every(c => expanded[c.key]);
+  const setAll = (open) => setExpanded(open ? Object.fromEntries(FAMILY_CATS.map(c => [c.key, true])) : {});
 
   // Merge optimistic approvals over server vendors: stamp userSet + override cat.
   const mergedVendors = (actuals?.vendors || []).map(v => ({
@@ -858,6 +861,9 @@ function BudgetCurrentYear({ forecast, setForecast, actuals, setActuals, year, r
         />
       )}
 
+      <div className="pnl-tools">
+        <button className="pnl-expand-btn" onClick={() => setAll(!allOpen)}>{allOpen ? "Collapse all" : "Show all line items"}</button>
+      </div>
       <div className="pnl-catlist">
         {FAMILY_CATS.map(c => {
           const target = getVal(c.key);

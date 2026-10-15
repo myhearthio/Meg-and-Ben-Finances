@@ -363,6 +363,13 @@ body {
 }
 .year-pill.active { background: var(--text); color: white; }
 
+.pnl-tools { display: flex; justify-content: flex-end; margin: -12px 0 10px; }
+.pnl-expand-btn {
+  padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel); color: var(--text-muted); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+}
+.pnl-expand-btn:hover { color: var(--text); border-color: var(--text); }
+
 .pnl-catlist {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--radius); overflow: hidden;

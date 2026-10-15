@@ -248,7 +248,22 @@ async function gatherSnapshot(year) {
   const ownsMask = o => !o.__plaid_item_id || !ownerByMask[o.mask || o.account_mask]
     || ownerByMask[o.mask || o.account_mask] === o.__plaid_item_id;
   accounts = accounts.filter(ownsMask);
-  plaidTx = plaidTx.filter(ownsMask);
+  // Gap fill: the owning Item can have holes (it stopped syncing while it needed
+  // re-auth and Plaid never backfilled — 0485/5538 lost Apr 23 → Jun 12 2026 this
+  // way). A newer Item carrying the same mask pulled a fresh full history. Keep
+  // every owner tx (ids stay stable for overrides), then add non-owner tx whose
+  // (mask, date, amount, pending) fingerprint the owner doesn't already have.
+  const ownerTx = plaidTx.filter(ownsMask);
+  const seen = new Set(ownerTx.map(t => t.account_mask + "|" + t.date + "|" + Number(t.amount).toFixed(2) + "|" + (t.pending ? 1 : 0)));
+  let filled = 0;
+  for (const t of plaidTx) {
+    if (ownsMask(t) || !t.account_mask) continue;
+    const k = t.account_mask + "|" + t.date + "|" + Number(t.amount).toFixed(2) + "|" + (t.pending ? 1 : 0);
+    if (seen.has(k)) continue;
+    seen.add(k); t.__gap_filled = true; ownerTx.push(t); filled++;
+  }
+  if (filled) console.log(`[snapshot] gap-filled ${filled} tx from non-owner Plaid items`);
+  plaidTx = ownerTx;
 
   // ---- Personal-accounts allow-list ----
   // Hardcoded. Anything not in this list (e.g. business accounts the user re-linked
@@ -1280,6 +1295,26 @@ app.get("/api/debug/raw-accounts", async (req, res) => {
         type: a.type, subtype: a.subtype, balance: a.balances && a.balances.current,
       })),
     });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Per-Item, per-mask transaction coverage BEFORE dedupe — shows which Plaid
+// connection actually holds data for a given window. ?from=YYYY-MM-DD&to=YYYY-MM-DD
+app.get("/api/debug/item-coverage", async (req, res) => {
+  try {
+    await plaid.ensureTokenLoaded();
+    const [accounts, tx] = await Promise.all([plaid.getAccounts(), plaid.getYTDTransactions()]);
+    const maskById = {}; for (const a of accounts) maskById[a.account_id] = a.mask;
+    const from = req.query.from || "0000", to = req.query.to || "9999";
+    const cov = {};
+    for (const t of tx) {
+      const k = t.__plaid_item_id + " / " + (maskById[t.account_id] || "?");
+      const c = cov[k] = cov[k] || { total: 0, in_window: 0, min: null, max: null };
+      c.total++; if (!c.min || t.date < c.min) c.min = t.date; if (!c.max || t.date > c.max) c.max = t.date;
+      if (t.date >= from && t.date <= to) c.in_window++;
+    }
+    const items = plaid.getItems().map(it => ({ item_id: it.item_id, name: it.institution_name, added_at: it.added_at }));
+    res.json({ items, window: { from, to }, coverage: cov });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

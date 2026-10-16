@@ -199,6 +199,7 @@ function normalizeVendor(raw) {
   m = s.match(/ONLINE ACH PAYMENT TO\s+([A-Z0-9 ]+?)\s*\(/);
   if (m) return m[1].replace(/\s+/g, " ").trim();
   if (/ONLINE TRANSFER TO CHK/.test(s)) return "ONLINE TRANSFER TO CHK";
+  if (/TRANSFER TO MASTERCARD/.test(s)) return "TRANSFER TO MASTERCARD";
   if (/^CHECK\b/.test(s)) return "CHECK";
   if (/^ATM WITHDRAWAL/.test(s)) return "ATM WITHDRAWAL";
   if (/VENMO/.test(s)) return "VENMO";

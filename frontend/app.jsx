@@ -999,7 +999,7 @@ function ApprovalCard({ pendingTxs, onApprove, onApproveVendor, onRenameVendor, 
       const next = { ...prev };
       let changed = false;
       for (const t of pageTxs) {
-        if (!(t.id in next)) { next[t.id] = t.suggestion || ""; changed = true; }
+        if (!(t.id in next)) { next[t.id] = t.suggestion || "other"; changed = true; }
       }
       return changed ? next : prev;
     });
@@ -1049,8 +1049,8 @@ function ApprovalCard({ pendingTxs, onApprove, onApproveVendor, onRenameVendor, 
                 cat={rowCats[tx.id] || ""}
                 vendorPending={vendorPendingCount[tx.vendorKey] || 0}
                 onCatChange={(c) => setCat(tx.id, c)}
-                onApprove={async () => onApprove(tx.id, rowCats[tx.id] || tx.suggestion)}
-                onApproveVendor={async () => onApproveVendor(tx.vendorKey, rowCats[tx.id] || tx.suggestion)}
+                onApprove={async () => onApprove(tx.id, rowCats[tx.id] || tx.suggestion || "other")}
+                onApproveVendor={async () => onApproveVendor(tx.vendorKey, rowCats[tx.id] || tx.suggestion || "other")}
                 onRenameVendor={async (n) => onRenameVendor(tx.vendorKey, n)}
                 onRenameTx={async (n) => onRenameTx(tx.id, n)}
               />
@@ -1101,8 +1101,7 @@ function ApprovalRow({ tx, cat, vendorPending, onCatChange, onApprove, onApprove
         <EditableText value={tx.desc} onSave={onRenameTx} className="approval-row-desc" />
       </div>
       <div className="approval-row-amount">{fmt(tx.amount)}</div>
-      <select className="approval-row-select" value={cat} onChange={e => onCatChange(e.target.value)}>
-        <option value="">Choose category…</option>
+      <select className="approval-row-select" value={cat || "other"} onChange={e => onCatChange(e.target.value)}>
         {FAMILY_CATS.map(c => <option key={c.key} value={c.key}>{c.parent ? "\u00A0\u00A0\u2014 " + c.label : c.label}</option>)}
       </select>
       <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "stretch" }}>

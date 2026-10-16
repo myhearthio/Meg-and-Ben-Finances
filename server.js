@@ -576,12 +576,23 @@ app.post("/api/income-forecast", async (req, res) => {
 // Maps Plaid's personal_finance_category + vendor keywords to family categories.
 // Returns a category key (e.g. "groceries") or "" if no confident guess.
 function guessCategory(t) {
-  const desc = String(t.desc || "").toUpperCase();
+  const desc = String(t.desc || "").toUpperCase().replace(/&AMP;/g, "&");
   const pfc = t.pfcDetailed || "";
   const primary = t.pfcPrimary || "";
 
+  // 0) Money movement — never an expense. Checked first so a transfer to a
+  //    card or another of our accounts can't be mis-guessed from a keyword.
+  if (/TRANSFER TO (CHK|SAV|MASTERCARD|CARD)|PAYMENT TO CHASE CARD|CHASE CREDIT CRD|AUTOPAY|CITIBANK, N\.A\. PAYMENT|AMERICAN EXPRESS ACH|EARNEST MONEY|WIRE TRANSFER|INCOMING WIRE|ONLINE TRANSFER TO|VENMO CASHOUT|INTEREST CHARGE|MONTHLY SERVICE FEE/.test(desc)) return "excluded";
+
   // 1) Vendor keyword overrides (highest priority — most accurate for our use)
   const KW = [
+    [/WHOLE ?F(OO)?DS|TRADER JOE|MARIANO|JEWEL|ALBERTSONS|MEIJER|ALDI|WEGMANS|SAFEWAY|KROGER|SHOPRITE|FAIRWAY|GRISTEDES|PUBLIX|FRESH DIRECT|GOPUFF|H MART|SPROUTS|INSTACART|PETE.S FRESH|CREEKSIDE MARKET/, "groceries"],
+    [/CAFE|DELI|BISTRO|GRILL|PIZZA|SUSHI|TAQUERIA|BAKERY|BREWING|TAVERN|KITCHEN|RESTAURANT|TINY TAPP/, "dining"],
+    [/STRIVEMD|WELLNESS|CLINIC|THERAPY|PILATES|ORTHO|PEDIATRIC|URGENT CARE|LAB ?CORP|QUEST DIAG/, "health"],
+    [/TESLA|SECRETARY OF STA|DMV|CIRCLE K|SPEEDWAY|MARATHON|CITGO|CAR WASH|JIFFY LUBE|AUTO ?ZONE/, "transportation"],
+    [/BARNES|PAPERSOURCE|PAPER SOURCE|CRATE|POTTERY BARN|WEST ELM|CONTAINER STORE|ETSY|UPS\b|FEDEX|USPS/, "shopping"],
+    [/MOADON|BZELL|TUITION|SCHOOL|ACADEMY|SUPERPROF|KUMON|TUTOR/, "education"],
+    [/SITTER|NANNY|CHILDCARE|DAYCARE|CARE\.COM/, "childcare"],
     [/WHOLE FOODS|TRADER JOE|ALDI|WEGMANS|SAFEWAY|KROGER|SHOPRITE|FAIRWAY|GRISTEDES|PUBLIX|FRESH DIRECT|GOPUFF|H MART|SPROUTS/, "groceries"],
     [/UBER EATS|DOORDASH|GRUBHUB|SEAMLESS|CHIPOTLE|SWEETGREEN|CAVA|DUNKIN|STARBUCKS|MCDONALD|CHICK-FIL-A|SHAKE SHACK|JOE.S? COFFEE|BLUE BOTTLE|PANERA|TST\*|TOAST/, "dining"],
     [/UBER\b|LYFT|REVEL|CITIBIKE|MTA|METRO|NJ TRANSIT|AMTRAK|SHELL|EXXON|MOBIL|BP\b|CHEVRON|PARKING|GARAGE|TOLL|EZPASS|E-?ZPASS/, "transportation"],
@@ -661,7 +672,9 @@ function guessCategory(t) {
   };
   if (PRIMARY[primary]) return PRIMARY[primary];
 
-  return "";
+  // 4) Always return a best guess. "other" is the honest default for one-off
+  //    merchants; the user can move it. Never leave the row blank.
+  return "other";
 }
 
 async function _buildActuals(yearOverride) {

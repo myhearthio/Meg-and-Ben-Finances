@@ -182,6 +182,14 @@ function normalizeVendor(raw) {
   // person becomes a "new vendor" and per-vendor learning never sticks.
   // Strip them up front, before any matching.
   s = s.replace(/\s+JPM[A-Z0-9]{8,}\b/g, "").trim();
+  // Chase debit-card POS wrappers carry the posting time and the card's last-4:
+  //   "DEBIT CARD PURCHASE 06/17 03:02A #7075 VZWRLSS*APOCC VISN 26168"
+  //   "VZWRLSS*APOCC VISN LAKE MARY FL 26076 : DEBIT CARD PURCHASE 03/17 03:02A #7075"
+  //   "MOBILE PURCHASE SIGN BASED 09/17 03:05A #7075 ..." / "RECURRING CARD PURCHASE ..."
+  // Left in, every month becomes its own vendor and learning never sticks.
+  s = s.replace(/\s*:?\s*(DEBIT CARD PURCHASE|MOBILE PURCHASE SIGN BASED|RECURRING CARD PURCHASE|CARD PURCHASE(?: WITH PIN)?|NON-CHASE ATM WITHDRAW)\s*(\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{2}[AP]?\s*)?(#\d{4}\s*)?/g, " ").trim();
+  // Merchant aliases the raw descriptor hides
+  if (/VZWRLSS|VZ ?WIRELESS|VERIZON/.test(s)) return "VERIZON WIRELESS";
   let m = s.match(/ORIG CO NAME:\s*([A-Z0-9&.\- ]+?)(?:\s+ORIG ID|\s+DESC DATE|$)/);
   if (m) return m[1].replace(/\s+/g, " ").trim();
   // Name class includes digits, parens, comma, & and / so descriptions like

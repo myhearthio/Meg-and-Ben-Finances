@@ -212,6 +212,7 @@ async function t_find_transactions(input, snap) {
   const { _buildActuals, _buildIncome, cleanDescription } = srv();
   const yr = resolveYear(input);
   const q = (input.query || "").toLowerCase();
+  const terms = queryTerms(q);
   const amt = input.amount != null ? Math.abs(Number(input.amount)) : null;
   const df = input.date_from || `${yr}-01-01`;
   const dt = input.date_to   || `${yr}-12-31`;
@@ -229,8 +230,7 @@ async function t_find_transactions(input, snap) {
     for (const t of v.txs) {
       if (!t.date || t.date < df || t.date > dt) continue;
       if (mask && t.mask !== mask) continue;
-      const desc = (t.desc || "").toLowerCase();
-      if (q && !desc.includes(q)) continue;
+      if (q && !matchesAny(terms, t.desc, v.name, v.key)) continue;
       if (amt != null && Math.abs(t.amount - amt) > 0.01) continue;
       hits.push({
         date: t.date, amount: round(t.amount), name: t.desc, mask: t.mask,
@@ -243,8 +243,7 @@ async function t_find_transactions(input, snap) {
     for (const t of v.txs) {
       if (!t.date || t.date < df || t.date > dt) continue;
       if (mask && t.mask !== mask) continue;
-      const desc = (t.desc || "").toLowerCase();
-      if (q && !desc.includes(q)) continue;
+      if (q && !matchesAny(terms, t.desc, v.name, v.key)) continue;
       if (amt != null && Math.abs(t.amount - amt) > 0.01) continue;
       hits.push({
         date: t.date, amount: round(t.amount), name: t.desc, mask: t.mask,
@@ -262,17 +261,48 @@ async function t_find_transactions(input, snap) {
   };
 }
 
+// Banks abbreviate merchants (VZWRLSS = Verizon, AMZN = Amazon). Expand a
+// user's plain-English query into every descriptor it might post under, and
+// match on vendor name, vendor key, AND raw tx descriptions.
+const MERCHANT_ALIASES = {
+  verizon: ["verizon", "vzw", "vzwrlss", "vz wireless"],
+  amazon: ["amazon", "amzn"],
+  comcast: ["comcast", "xfinity"],
+  "whole foods": ["whole foods", "wholefds", "wholefoods"],
+  starbucks: ["starbucks", "sbux"],
+  "home depot": ["home depot", "homedepot"],
+  costco: ["costco", "costco whse"],
+  target: ["target"],
+  united: ["united", "united air", "ua inflt"],
+  apple: ["apple", "apple.com"],
+  google: ["google", "goog"],
+  uber: ["uber"],
+  mortgage: ["mortgage", "central loan", "cenlar"],
+  "eli lilly": ["eli lilly", "lilly"],
+};
+function queryTerms(q) {
+  const s = String(q || "").toLowerCase().trim();
+  if (!s) return [];
+  for (const [k, al] of Object.entries(MERCHANT_ALIASES)) if (s === k || al.includes(s) || s.includes(k)) return [...new Set([s, ...al])];
+  return [s];
+}
+function matchesAny(terms, ...fields) {
+  if (!terms.length) return true;
+  const hay = fields.map(f => String(f || "").toLowerCase()).join(" \u0001 ");
+  return terms.some(t => hay.includes(t));
+}
+
 async function t_get_vendor_total(input, snap) {
   const { _buildActuals } = srv();
   const yr = resolveYear(input);
   const q = String(input.vendor || "").toLowerCase();
   if (!q) return { vendor: input.vendor, year: yr, found: false, count: 0, total: 0 };
+  const terms = queryTerms(q);
 
   const actuals = await _buildActuals(yr);
-  // Match against vendor name (post-cleanup) — substring, case-insensitive.
+  // Match vendor name/key, or any of the vendor's raw tx descriptions.
   const matches = actuals.vendors.filter(v =>
-    (v.name || "").toLowerCase().includes(q) ||
-    (v.key || "").toLowerCase().includes(q)
+    matchesAny(terms, v.name, v.key, v.rawSample) || v.txs.some(t => matchesAny(terms, t.desc))
   );
   if (!matches.length) return { vendor: input.vendor, year: yr, found: false, count: 0, total: 0 };
 

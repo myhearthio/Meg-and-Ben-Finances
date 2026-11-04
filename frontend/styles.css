@@ -306,6 +306,7 @@ body {
   display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px;
   vertical-align: middle;
 }
+.legend-swatch.legend-dash { height: 0; width: 14px; border-top: 2px dashed; border-radius: 0; background: none; }
 
 /* Approval queue */
 .approval-card {

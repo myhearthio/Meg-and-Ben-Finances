@@ -524,7 +524,7 @@ function MonthlyCharts({ snap }) {
 }
 
 function Chart({ title, data, color, signed, totalLabel, total, annualTarget }) {
-  const w = 640, h = 220, padL = 32, padR = 16, padT = 24, padB = 28;
+  const w = 640, h = 220, padL = 32, padR = 16, padT = 24, padB = signed ? 40 : 28;
   const innerW = w - padL - padR, innerH = h - padT - padB;
   const slot = innerW / 12;
   const barW = slot * 0.62;
@@ -566,18 +566,15 @@ function Chart({ title, data, color, signed, totalLabel, total, annualTarget }) 
           const barColor = signed && d.v < 0 ? "#b91c1c" : color;
           return (
             <g key={i}>
+              {/* Target: a thin tick across the slot, not a full bar — keeps one bar per month */}
               {d.target > 0 && (
-                <rect x={x} y={targetY} width={barW} height={Math.max(1, targetH)} fill={color} opacity="0.85" rx="2"/>
+                <line x1={x - 4} x2={x + barW + 4} y1={targetY} y2={targetY} stroke={color} strokeWidth="2" strokeDasharray="3 2" opacity="0.9"/>
               )}
               <rect x={x} y={valY} width={barW} height={Math.max(1, valH)} fill={d.target > 0 ? lightTint : barColor} rx="2"
                     opacity={d.target > 0 ? 1 : 0.85}/>
-              {d.target > 0 && (
-                <text x={cx} y={Math.min(targetY, valY) - 14} textAnchor="middle" fontSize="9" fill="#888">
-                  {fmt(d.target)}
-                </text>
-              )}
+              {/* Value label follows the bar tip: above for positive, below for negative. One label per month on one baseline. */}
               {d.v !== 0 && (
-                <text x={cx} y={Math.min(targetY || valY, valY) - 4} textAnchor="middle" fontSize="10" fontWeight="600" fill={barColor}>
+                <text x={cx} y={d.v >= 0 ? valY - 5 : valY + valH + 11} textAnchor="middle" fontSize="10" fontWeight="600" fill={barColor}>
                   {fmt(d.v)}
                 </text>
               )}
@@ -588,7 +585,7 @@ function Chart({ title, data, color, signed, totalLabel, total, annualTarget }) 
       </svg>
       {annualTarget != null && annualTarget > 0 && (
         <div className="chart-legend">
-          <span><span className="legend-swatch" style={{background: color}}></span>Target</span>
+          <span><span className="legend-swatch legend-dash" style={{borderColor: color}}></span>Target {fmt(annualTarget/12)}/mo</span>
           <span><span className="legend-swatch" style={{background: lightTint}}></span>Actual</span>
         </div>
       )}

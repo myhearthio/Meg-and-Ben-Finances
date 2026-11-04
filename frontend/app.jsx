@@ -2179,6 +2179,7 @@ function InvestmentRow({ row, onChange, total }) {
   const [draftValue, setDraftValue] = useState(String(row.value || 0));
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
+  const [showHist, setShowHist] = useState(false);
   const [parseStatus, setParseStatus] = useState(null); // null | "uploading" | "ok" | { error }
 
   const pct = total > 0 ? Math.round((row.value / total) * 100) : 0;
@@ -2277,7 +2278,29 @@ function InvestmentRow({ row, onChange, total }) {
         {row.last_pdf_label && <span>· {row.last_pdf_label}</span>}
         {row.source === "rockefeller" && <span>· From PDF</span>}
         {row.source === "manual" && <span>· Manual entry</span>}
+        {(row.history || []).length > 1 && (
+          <button className="inv-hist-toggle" onClick={() => setShowHist(h => !h)}>{showHist ? "Hide history" : `History (${row.history.length})`}</button>
+        )}
       </div>
+      {showHist && (row.history || []).length > 0 && (
+        <div className="inv-hist">
+          {row.history.slice().reverse().map((h, i, arr) => {
+            const prev = arr[i + 1];
+            const delta = prev ? h.value - prev.value : null;
+            const pctD = prev && prev.value ? (delta / prev.value) * 100 : null;
+            return (
+              <div key={h.date + i} className="inv-hist-row">
+                <span className="inv-hist-date mono">{h.date}</span>
+                <span className="inv-hist-src">{h.source === "statement" ? "statement" : "manual"}</span>
+                <span className="inv-hist-val mono">{fmt(h.value)}</span>
+                <span className={"inv-hist-delta mono" + (delta == null ? "" : delta >= 0 ? " up" : " down")}>
+                  {delta == null ? "" : `${delta >= 0 ? "+" : "\u2212"}${fmt(Math.abs(delta))}${pctD != null ? ` (${pctD >= 0 ? "+" : "\u2212"}${Math.abs(pctD).toFixed(1)}%)` : ""}`}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
       {parseStatus === "uploading" && <div className="inv-row-status">Reading PDF…</div>}
       {parseStatus === "ok" && <div className="inv-row-status inv-row-status-ok">Updated.</div>}
       {parseStatus && parseStatus.error && <div className="inv-row-status inv-row-status-err">{parseStatus.error}</div>}

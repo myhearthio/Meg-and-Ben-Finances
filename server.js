@@ -1163,6 +1163,19 @@ function _newInvestmentId() {
   return "inv_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
 }
 
+// Append a dated point to the row's value history whenever the value changes.
+// as_of = statement date if known (PDF), else today. Same-day re-uploads replace
+// that day's point instead of stacking duplicates.
+function _pushHistory(row, value, source, as_of) {
+  const v = Number(value) || 0;
+  const day = (as_of && /^\d{4}-\d{2}-\d{2}/.test(as_of)) ? as_of.slice(0, 10) : new Date().toISOString().slice(0, 10);
+  row.history = Array.isArray(row.history) ? row.history : [];
+  const last = row.history[row.history.length - 1];
+  if (last && last.date === day) { last.value = v; last.source = source; return; }
+  if (last && Math.abs(last.value - v) < 0.005) return;
+  row.history.push({ date: day, value: v, source });
+}
+
 app.get("/api/investments", async (req, res) => {
   try {
     const list = await _readInvestments();
@@ -1182,7 +1195,7 @@ app.post("/api/investments", async (req, res) => {
       row = list.find(x => x.id === body.id);
       if (!row) return res.status(404).json({ error: "investment not found" });
       if (body.name !== undefined) row.name = String(body.name);
-      if (body.value !== undefined) row.value = Number(body.value) || 0;
+      if (body.value !== undefined) { row.value = Number(body.value) || 0; _pushHistory(row, row.value, body.source || "manual", body.as_of); }
       if (body.source !== undefined) row.source = String(body.source);
       if (body.note !== undefined) row.note = String(body.note);
       if (body.instructions !== undefined) row.instructions = String(body.instructions);
@@ -1197,6 +1210,7 @@ app.post("/api/investments", async (req, res) => {
         instructions: String(body.instructions || ""),
         updated_at: new Date().toISOString(),
       };
+      _pushHistory(row, row.value, row.source, body.as_of);
       list.push(row);
     }
     await _writeInvestments(list);
@@ -1286,6 +1300,7 @@ Respond with ONLY a JSON object, no prose, no markdown:
       row.last_pdf_as_of = parsed.as_of || "";
       row.last_pdf_confidence = parsed.confidence || "";
       row.updated_at = new Date().toISOString();
+      _pushHistory(row, parsed.total, "statement", parsed.as_of);
     } else {
       row = {
         id: _newInvestmentId(),
@@ -1298,6 +1313,7 @@ Respond with ONLY a JSON object, no prose, no markdown:
         last_pdf_confidence: parsed.confidence || "",
         updated_at: new Date().toISOString(),
       };
+      _pushHistory(row, parsed.total, "statement", parsed.as_of);
       list.push(row);
     }
     await _writeInvestments(list);

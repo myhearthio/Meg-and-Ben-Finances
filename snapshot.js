@@ -67,9 +67,27 @@ function txKey(t) {
   return `${t.account_id}|${t.date}|${t.amount}|${(t.name || "").slice(0, 40)}`;
 }
 
-// Tx ID format MUST match _buildActuals in server.js.
-function mkTxId(t) {
+// Tx ID. Base form is date|amount|desc(60). Two real charges can share that
+// fingerprint (two $3.10 vending-machine buys, two $9.99 Apple subscriptions
+// on the same day) — so assignTxIds() stamps t.__txid once per snapshot, with
+// "#2", "#3"… on the second and later duplicates. The first keeps the plain
+// base id, so every historical override still matches. ALL consumers read
+// t.__txid via mkTxId(); never rebuild the string elsewhere.
+function baseTxId(t) {
   return (t.date || "") + "|" + Number(t.amount) + "|" + String(t.name || "").slice(0, 60);
+}
+function assignTxIds(list) {
+  const seen = new Map();
+  for (const t of list) {
+    const b = baseTxId(t);
+    const n = (seen.get(b) || 0) + 1;
+    seen.set(b, n);
+    t.__txid = n === 1 ? b : b + "#" + n;
+  }
+  return list;
+}
+function mkTxId(t) {
+  return t.__txid || baseTxId(t);
 }
 
 // Internal transfer: two depository tx, same date, opposite-sign matched amounts (±0.01),
@@ -252,4 +270,4 @@ async function buildSnapshot({ accounts, plaidTx, excludedTxIds, year }) {
   };
 }
 
-module.exports = { buildSnapshot };
+module.exports = { buildSnapshot, mkTxId, assignTxIds };

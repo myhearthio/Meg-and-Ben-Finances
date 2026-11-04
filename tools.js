@@ -59,9 +59,7 @@ function normalizeVendor(s) {
   return require("./server.js").normalizeVendor(s);
 }
 
-function mkTxId(t) {
-  return (t.date || "") + "|" + Number(t.amount) + "|" + String(t.name || "").slice(0, 60);
-}
+function mkTxId(t) { return require("./snapshot").mkTxId(t); }
 
 function snapshotYear() {
   return String(Number(process.env.SNAPSHOT_YEAR) || new Date().getFullYear());

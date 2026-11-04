@@ -26,7 +26,7 @@ const path = require("path");
 const db = require("./data");
 const plaid = require("./plaid");
 const csv = require("./csv");
-const { buildSnapshot } = require("./snapshot");
+const { buildSnapshot, mkTxId, assignTxIds } = require("./snapshot");
 const { chat, readHaroldMd, readHistory, writeHistory } = require("./chat");
 
 const app = express();
@@ -334,9 +334,10 @@ async function gatherSnapshot(year) {
       if (k.startsWith("__")) continue;
       incomeVendorCat[k] = cat;
     }
+    assignTxIds(finalTx);
     for (const t of finalTx) {
       const raw = String(t.name || "").trim();
-      const txId = (t.date || "") + "|" + Number(t.amount) + "|" + raw.slice(0, 60);
+      const txId = mkTxId(t);
       // Deposit (income side): negative amount in a depository account.
       const isDeposit = t.amount < 0 && (t.account_type || "").toLowerCase() === "depository";
       if (isDeposit) {
@@ -709,7 +710,7 @@ async function _buildActuals(yearOverride) {
     const isUnrolled = unrolledPrefixes.some(re => re.test(rawDesc));
     const normName = normalizeVendor(rawDesc);
     const vendorKey = isUnrolled ? (normName + "#" + txIdx) : normName;
-    const txId = (t.date || "") + "|" + Number(t.amount) + "|" + rawDesc.slice(0, 60);
+    const txId = mkTxId(t);
     // Plaid category data (used for auto-guess)
     const pfc = t.personal_finance_category || null;
     const pfcPrimary = pfc ? String(pfc.primary || "").toUpperCase() : "";
@@ -774,7 +775,7 @@ app.post("/api/actuals", async (req, res) => {
             const raw = String(t.name || "").trim();
             const vKey = normalizeVendor(raw);
             if (vKey === body.vendor_key) {
-              const txId = (t.date || "") + "|" + Number(t.amount) + "|" + raw.slice(0, 60);
+              const txId = mkTxId(t);
               vendorTxIds.add(txId);
             }
           }
@@ -812,7 +813,7 @@ async function _buildIncome(yearOverride) {
     const rawDesc = String(t.name || "").trim();
     const normName = normalizeVendor(rawDesc);
     const vendorKey = normName;
-    const txId = (t.date || "") + "|" + Number(t.amount) + "|" + rawDesc.slice(0, 60);
+    const txId = mkTxId(t);
     // For income, "amount" should display as a positive deposit value.
     const amt = -Number(t.amount);
     txList.push({ id: txId, date: (t.date || "").slice(0, 10), desc: cleanDescription(rawDesc), amount: amt, vendorKey, vendorNorm: normName, mask: t.account_mask || "" });
@@ -878,7 +879,7 @@ app.post("/api/income", async (req, res) => {
             const raw = String(t.name || "").trim();
             const vKey = normalizeVendor(raw);
             if (vKey === body.vendor_key) {
-              const txId = (t.date || "") + "|" + Number(t.amount) + "|" + raw.slice(0, 60);
+              const txId = mkTxId(t);
               vendorTxIds.add(txId);
             }
           }
@@ -933,7 +934,7 @@ app.post("/api/income/batch", async (req, res) => {
           const raw = String(t.name || "").trim();
           const vKey = normalizeVendor(raw);
           if (wantedVendors.has(vKey)) {
-            const txId = (t.date || "") + "|" + Number(t.amount) + "|" + raw.slice(0, 60);
+            const txId = mkTxId(t);
             delete obj.__tx[txId];
           }
         }
@@ -987,7 +988,7 @@ app.post("/api/actuals/batch", async (req, res) => {
           const raw = String(t.name || "").trim();
           const vKey = normalizeVendor(raw);
           if (wantedVendors.has(vKey)) {
-            const txId = (t.date || "") + "|" + Number(t.amount) + "|" + raw.slice(0, 60);
+            const txId = mkTxId(t);
             delete obj.__tx[txId];
           }
         }

@@ -430,14 +430,14 @@ function Main({ snap, tab }) {
 
 function Dashboard({ snap }) {
   const [nw, setNw] = useState(null);
-  useEffect(() => {
-    fetch("/api/networth?year=" + snap.year).then(r => r.json()).then(j => { if (!j.error) setNw(j); }).catch(() => {});
-  }, [snap.year]);
+  const loadNw = () => fetch("/api/networth?year=" + snap.year).then(r => r.json()).then(j => { if (!j.error) setNw(j); }).catch(() => {});
+  useEffect(() => { loadNw(); }, [snap.year]);
   return (
     <div className="main">
       <div className="page-title">Dashboard</div>
       <div className="page-subtitle">As of {snap.as_of_date} · year {snap.year}</div>
       <NetWorthHero snap={snap} nw={nw} />
+      {nw && nw.goal && <GoalCard goal={nw.goal} investedYtd={nw.invested_ytd} year={snap.year} onSaved={loadNw} />}
       <KpiRow snap={snap} nw={nw} />
       <MonthlyCharts snap={snap} />
     </div>
@@ -518,6 +518,64 @@ function NetWorthHero({ snap, nw }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// Retirement goal (2026-11-16): progress toward the target plus the yearly amount to invest
+// from here. The yearly number is recomputed on every load, so it shrinks as you get ahead.
+function GoalCard({ goal, investedYtd, year, onSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [t, setT] = useState(String(goal.target));
+  const [y, setY] = useState(String(goal.year));
+  const [err, setErr] = useState("");
+  const save = async () => {
+    setErr("");
+    const r = await fetch("/api/goal", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: t, year: y }) });
+    const j = await r.json();
+    if (!r.ok || j.error) { setErr(j.error || "Couldn't save"); return; }
+    setEditing(false); onSaved();
+  };
+  const pct = Math.min(1, goal.pct);
+  const thisYearPct = goal.per_year > 0 ? Math.min(1, investedYtd / goal.per_year) : 1;
+  return (
+    <div className="goal-card">
+      <div className="goal-head">
+        <div>
+          <div className="kpi-label">Retirement goal</div>
+          {editing ? (
+            <div className="goal-edit">
+              <label htmlFor="goal-target">Target</label>
+              <input id="goal-target" value={t} onChange={e => setT(e.target.value.replace(/[^0-9]/g, ""))} />
+              <label htmlFor="goal-year">by</label>
+              <input id="goal-year" value={y} onChange={e => setY(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))} />
+              <button className="goal-btn primary" onClick={save}>Save</button>
+              <button className="goal-btn" onClick={() => setEditing(false)}>Cancel</button>
+              {err && <span className="goal-err">{err}</span>}
+            </div>
+          ) : (
+            <div className="goal-title">{fmtShort(goal.target)} by {goal.year} <button className="goal-link" onClick={() => setEditing(true)}>Edit</button></div>
+          )}
+        </div>
+        <div className="goal-have">
+          <div className="goal-have-val">{fmtShort(goal.counted)} <span>{(goal.pct * 100).toFixed(0)}%</span></div>
+          <div className="kpi-sub">Investments + rental equity</div>
+        </div>
+      </div>
+      <div className="goal-bar"><span style={{ width: (pct * 100) + "%" }} /></div>
+      <div className="goal-foot">
+        <div>
+          <div className="goal-foot-label">Invest each year to stay on track</div>
+          <div className="goal-foot-val">{goal.per_year > 0 ? fmt(goal.per_year) : "On track with growth alone"}</div>
+          <div className="kpi-sub">Recalculated as balances update: it shrinks when you get ahead. Assumes {(goal.real_return * 100).toFixed(0)}% growth above inflation, {goal.years_left} years left.</div>
+        </div>
+        <div>
+          <div className="goal-foot-label">Invested in {year} so far</div>
+          <div className="goal-foot-val">{fmt(investedYtd)}</div>
+          <div className="goal-mini"><span style={{ width: (thisYearPct * 100) + "%" }} /></div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -802,14 +802,34 @@ const NW_GROUPS = [
   { key: "investments", label: "Investments", match: /./ },
 ];
 const NW_HISTORY_KEY = "networth-history";
+// Retirement goal (2026-11-16, Ben): $13.5M by 2036. "Counts toward" = investment rows + rental
+// equity; the primary home (Logan), 529s and vehicles don't fund retirement.
+const GOAL_KEY = "retirement-goal";
+const GOAL_DEFAULT = { target: 13500000, year: 2036, real_return: 0.05 };
+async function _readGoal() { return Object.assign({}, GOAL_DEFAULT, (await db.kvGet(GOAL_KEY, {})) || {}); }
+function _goalMath(goal, counted) {
+  const now = new Date();
+  const yearsLeft = Math.max(0, (Date.UTC(goal.year, 0, 1) - now.getTime()) / (365.25 * 864e5));
+  const r = Number(goal.real_return) || 0.05;
+  const grow = Math.pow(1 + r, yearsLeft);
+  const gap = goal.target - counted * grow;          // what market growth alone won't cover
+  // Level yearly amount that closes the gap by the target year. Recomputed on every load,
+  // so it shrinks as the balance grows faster than planned (and grows if behind).
+  const perYear = gap <= 0 ? 0 : (yearsLeft > 0 ? gap * r / (grow - 1) : gap);
+  return { target: goal.target, year: goal.year, real_return: r, counted: Math.round(counted),
+    pct: goal.target > 0 ? counted / goal.target : 0, years_left: Math.round(yearsLeft * 10) / 10,
+    per_year: Math.round(perYear) };
+}
 async function _buildNetWorth(year) {
   const snap = await getSnapshot(false);
   const list = (await db.kvGet(INVESTMENTS_KEY, [])) || [];
   const groups = NW_GROUPS.map(g => ({ key: g.key, label: g.label, total: 0, count: 0, newest: null, oldest: null }));
+  let towardGoal = 0;
   for (const row of list) {
     const gi = NW_GROUPS.findIndex(g => g.match.test(String(row.name || "")));
     const g = groups[gi];
     g.total += Number(row.value) || 0; g.count += 1;
+    if (g.key === "investments" || (g.key === "real_estate" && !/logan/i.test(String(row.name || "")))) towardGoal += Number(row.value) || 0;
     const d = String(row.updated_at || "").slice(0, 10) || null;
     if (d && (!g.newest || d > g.newest)) g.newest = d;
     if (!d || !g.oldest || d < g.oldest) g.oldest = d || g.oldest;
@@ -832,8 +852,21 @@ async function _buildNetWorth(year) {
     invested_ytd: Math.round(inv.total), income_ytd: Math.round(income),
     invest_rate: income > 0 ? inv.total / income : null,
     history: series,
+    goal: _goalMath(await _readGoal(), towardGoal),
   };
 }
+app.post("/api/goal", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const cur = await _readGoal();
+    const target = Number(String(b.target ?? cur.target).replace(/[$,\s]/g, ""));
+    const year = Number(b.year ?? cur.year);
+    if (!(target > 0) || !(year >= new Date().getFullYear() && year <= 2100)) return res.status(400).json({ error: "target must be a positive amount and year must be this year or later" });
+    const next = { ...cur, target: Math.round(target), year: Math.round(year) };
+    await db.kvSet(GOAL_KEY, next);
+    res.json({ ok: true, goal: next });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.get("/api/networth", async (req, res) => {
   try { res.json(await _buildNetWorth(req.query.year ? String(req.query.year) : null)); }
   catch (e) { console.log("networth err:", e); res.status(500).json({ error: e.message }); }

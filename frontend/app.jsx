@@ -2095,7 +2095,7 @@ function InvestmentsView() {
       <div className="inv-header">
         <div>
           <div className="page-title">Investments</div>
-          <div className="page-subtitle">Drag a Rockefeller statement PDF onto its row to refresh. Type a value for everything else.</div>
+          <div className="page-subtitle">Drop the Rockefeller holdings spreadsheet (or a statement PDF) onto its row to refresh. Type a value for everything else.</div>
         </div>
         {!loading && list.length > 0 && (
           <button className="inv-review-btn" onClick={() => setWalkthrough(staleCount > 0 ? "stale" : "all")}>
@@ -2284,11 +2284,51 @@ function InvestmentRow({ row, onChange, total }) {
     }
   };
 
+  // Rockefeller holdings export (AccountTypeDetailsReport.xlsx), added 2026-11-16.
+  // One row per holding with an Account and a Value column. Value of this row =
+  // every Rockefeller account (brokerage, IRAs, Roths), leaving out the outside items
+  // Rockefeller also lists: Logan Blvd (no account number) and Benny Checking (***0485).
+  const uploadHoldings = async (file) => {
+    if (!file) return;
+    if (!window.XLSX) { setParseStatus({ error: "spreadsheet reader didn't load - refresh and try again" }); return; }
+    setParseStatus("uploading");
+    try {
+      const wb = window.XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const rows = window.XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
+      const byAcct = {};
+      for (const r of rows) {
+        const acct = String(r["Account"] || "").trim();
+        const v = Number(String(r["Value"]).replace(/[$,]/g, "")) || 0;
+        if (!acct || acct.startsWith("*")) continue;
+        byAcct[acct] = byAcct[acct] || { nick: String(r["Nickname"] || "").trim(), v: 0 };
+        byAcct[acct].v += v;
+      }
+      const accts = Object.entries(byAcct).filter(([, a]) => Math.abs(a.v) >= 0.01).sort((a, b) => b[1].v - a[1].v);
+      if (!accts.length) { setParseStatus({ error: "no accounts found - is this the Rockefeller holdings export?" }); return; }
+      const value = Math.round(accts.reduce((n, [, a]) => n + a.v, 0) * 100) / 100;
+      const note = "Rockefeller holdings export " + new Date().toISOString().slice(0, 10) + ": " +
+        accts.map(([id, a]) => (a.nick || id) + " " + id + " $" + Math.round(a.v).toLocaleString()).join("; ") +
+        ". Excludes Logan Blvd and Benny Checking.";
+      const r = await fetch("/api/investments", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: row.id, value, source: "statement", note }),
+      });
+      const j = await r.json();
+      if (!r.ok || j.error) setParseStatus({ error: j.error || "save failed" });
+      else { setParseStatus("ok"); onChange(); setTimeout(() => setParseStatus(null), 3000); }
+    } catch (e) { setParseStatus({ error: "couldn't read that file: " + e.message }); }
+  };
+  const uploadAny = (f) => {
+    if (!f) return;
+    if (/\.(xlsx|xls|csv)$/i.test(f.name)) uploadHoldings(f);
+    else if (f.type === "application/pdf") uploadPdf(f);
+    else setParseStatus({ error: "drop a PDF statement or the Rockefeller holdings spreadsheet" });
+  };
+
   const onDrop = (e) => {
     e.preventDefault(); setDrag(false);
     const f = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f && f.type === "application/pdf") uploadPdf(f);
-    else setParseStatus({ error: "drop a PDF file" });
+    uploadAny(f);
   };
 
   return (
@@ -2317,9 +2357,9 @@ function InvestmentRow({ row, onChange, total }) {
             <div className="inv-row-value">{fmt(row.value)}</div>
             <div className="inv-row-actions">
               <label className="inv-btn-secondary">
-                Upload PDF
-                <input type="file" accept="application/pdf" style={{ display: "none" }}
-                       onChange={e => uploadPdf(e.target.files[0])} />
+                Upload
+                <input type="file" accept="application/pdf,.xlsx,.xls,.csv" style={{ display: "none" }}
+                       onChange={e => uploadAny(e.target.files[0])} />
               </label>
               <button className="inv-btn-secondary" onClick={() => { setDraftName(row.name); setDraftValue(String(row.value)); setEditing(true); }}>Edit</button>
               <button className="inv-btn-ghost" onClick={remove}>Delete</button>
@@ -2361,7 +2401,7 @@ function InvestmentRow({ row, onChange, total }) {
           })}
         </div>
       )}
-      {parseStatus === "uploading" && <div className="inv-row-status">Reading PDF…</div>}
+      {parseStatus === "uploading" && <div className="inv-row-status">Reading file…</div>}
       {parseStatus === "ok" && <div className="inv-row-status inv-row-status-ok">Updated.</div>}
       {parseStatus && parseStatus.error && <div className="inv-row-status inv-row-status-err">{parseStatus.error}</div>}
       {drag && <div className="inv-row-drop-hint">Drop the PDF</div>}

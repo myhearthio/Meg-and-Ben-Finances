@@ -750,6 +750,47 @@ app.get("/api/actuals", async (req, res) => {
   catch (e) { console.log("actuals err:", e); res.status(500).json({ error: e.message }); }
 });
 
+// ---- Invested this year (2026-11-16) ----
+// Read-only view of money moved INTO investments. Built from the same _buildActuals data
+// the Budget page shows: only transactions already categorized "excluded" (paid from
+// savings/investments) are considered, so expense totals are untouched. A transaction
+// counts as invested when its vendor/description matches one of the buckets below.
+// Deliberately NOT included: card payments, own-account transfers, earnest money (per Ben),
+// and 401(k) (comes out of payroll, never hits the bank feed).
+const INVEST_BUCKETS = [
+  { key: "rockefeller", label: "Rockefeller", match: /NATL FIN SVC/i },   // Rockefeller's clearing firm (National Financial Services)
+  { key: "529", label: "Kids' 529s", match: /BRIGHT ?DIRECTIONS/i },
+];
+async function _buildInvested(year) {
+  const yr = String(year || new Date().getFullYear());
+  const act = await _buildActuals(yr);
+  const buckets = INVEST_BUCKETS.map(b => ({ key: b.key, label: b.label, total: 0, count: 0, byMonth: {}, txs: [] }));
+  const byMonth = {};
+  let total = 0;
+  for (const v of act.vendors) {
+    for (const tx of v.txs) {
+      if (tx.cat !== "excluded") continue;
+      const hay = [v.key, v.name, v.rawSample, tx.desc].join(" ");
+      const i = INVEST_BUCKETS.findIndex(b => b.match.test(hay));
+      if (i < 0) continue;
+      const b = buckets[i];
+      const m = String(tx.date || "").slice(5, 7);
+      b.total += tx.amount; b.count += 1; b.byMonth[m] = (b.byMonth[m] || 0) + tx.amount;
+      b.txs.push({ id: tx.id, date: tx.date, desc: tx.desc, amount: tx.amount });
+      byMonth[m] = (byMonth[m] || 0) + tx.amount;
+      total += tx.amount;
+    }
+  }
+  buckets.forEach(b => b.txs.sort((a, c) => (c.date || "").localeCompare(a.date || "")));
+  // Spending = every non-excluded expense, the same base as the Budget page.
+  const spending = Object.entries(act.byCategory || {}).reduce((s, [k, n]) => k === "excluded" ? s : s + n, 0);
+  return { year: yr, total, byMonth, buckets, spending };
+}
+app.get("/api/invested", async (req, res) => {
+  try { res.json(await _buildInvested(req.query.year ? String(req.query.year) : null)); }
+  catch (e) { console.log("invested err:", e); res.status(500).json({ error: e.message }); }
+});
+
 app.post("/api/actuals", async (req, res) => {
   try {
     const body = req.body || {};

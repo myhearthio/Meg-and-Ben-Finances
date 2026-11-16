@@ -629,6 +629,7 @@ function BudgetView({ snap }) {
           <div key={y} className={"year-pill" + (y === year ? " active" : "")} onClick={() => setYear(y)}>{y}</div>
         ))}
       </div>
+      <InvestedCard year={year} />
       <BudgetCurrentYear
         forecast={forecast}
         setForecast={setForecast}
@@ -637,6 +638,65 @@ function BudgetView({ snap }) {
         year={year}
         readOnly={!isEditable}
       />
+    </div>
+  );
+}
+
+// "Invested this year" (2026-11-16): money moved into Rockefeller and the kids' 529s.
+// Read-only; numbers come from /api/invested, which only looks at transactions already
+// marked Excluded, so it never changes the expense totals below it.
+function InvestedCard({ year }) {
+  const [d, setD] = useState(null);
+  const [open, setOpen] = useState({});
+  useEffect(() => {
+    setD(null);
+    fetch("/api/invested?year=" + year).then(r => r.json()).then(j => { if (!j.error) setD(j); }).catch(() => {});
+  }, [year]);
+  if (!d) return null;
+  const months = ["01","02","03","04","05","06","07","08","09","10","11","12"];
+  const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const maxM = Math.max(1, ...months.map(m => d.byMonth[m] || 0));
+  const ratio = d.spending > 0 ? d.total / d.spending : 0;
+  return (
+    <div className="invested-card">
+      <div className="invested-head">
+        <div>
+          <div className="kpi-label">Invested in {d.year}</div>
+          <div className="kpi-value green">{fmt(d.total)}</div>
+          <div className="kpi-sub">Paid from savings into investments. Not counted as an expense.</div>
+        </div>
+        <div className="invested-vs">
+          <div className="kpi-label">Spent in {d.year}</div>
+          <div className="kpi-value">{fmt(d.spending)}</div>
+          <div className="kpi-sub">{d.spending > 0 ? "Invested $" + ratio.toFixed(2) + " for every $1 spent" : ""}</div>
+        </div>
+      </div>
+      <div className="invested-buckets">
+        {d.buckets.map(b => (
+          <div key={b.key} className="invested-bucket">
+            <div className="invested-bucket-row" onClick={() => setOpen(o => ({ ...o, [b.key]: !o[b.key] }))}>
+              <span className="invested-caret">{open[b.key] ? "\u25be" : "\u25b8"}</span>
+              <span className="invested-bucket-name">{b.label}</span>
+              <span className="invested-bucket-count">{b.count} deposits</span>
+              <span className="invested-bucket-amt">{fmt(b.total)}</span>
+            </div>
+            {open[b.key] && b.txs.map(t => (
+              <div key={t.id} className="invested-tx">
+                <span>{fmtTxDate(t.date)}</span><span className="invested-tx-desc">{t.desc}</span><span>{fmt(t.amount)}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      <div className="invested-months">
+        {months.map((m, i) => (
+          <div key={m} className="invested-month" title={names[i] + ": " + fmt(d.byMonth[m] || 0)}>
+            <div className="invested-bar-wrap"><div className="invested-bar" style={{ height: ((d.byMonth[m] || 0) / maxM * 100) + "%" }} /></div>
+            <div className="invested-month-name">{names[i]}</div>
+          </div>
+        ))}
+      </div>
+      <div className="invested-note">Not included: 401(k) (comes out of payroll), card payments, transfers between your own accounts, earnest money.</div>
     </div>
   );
 }

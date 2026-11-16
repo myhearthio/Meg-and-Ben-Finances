@@ -1032,3 +1032,22 @@ body {
   .kpi-row { grid-template-columns: repeat(3, 1fr); }
   .nw-hero-value { font-size: 36px; }
 }
+
+/* Invested this year (Budget) */
+.invested-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 24px; }
+.invested-head { display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; margin-bottom: 16px; }
+.invested-vs { text-align: right; }
+.invested-buckets { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+.invested-bucket-row { display: grid; grid-template-columns: 16px 1fr auto 120px; gap: 10px; align-items: center; padding: 10px 12px; background: var(--panel-2); border-radius: var(--radius-sm); cursor: pointer; }
+.invested-caret { color: var(--text-muted); font-size: 11px; }
+.invested-bucket-name { font-weight: 600; }
+.invested-bucket-count { color: var(--text-muted); font-size: 12px; }
+.invested-bucket-amt { text-align: right; font-family: "JetBrains Mono", monospace; font-weight: 600; }
+.invested-tx { display: grid; grid-template-columns: 70px 1fr 120px; gap: 10px; padding: 6px 12px 6px 38px; font-size: 12px; color: var(--text-muted); }
+.invested-tx span:last-child { text-align: right; font-family: "JetBrains Mono", monospace; }
+.invested-tx-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.invested-months { display: grid; grid-template-columns: repeat(12, 1fr); gap: 6px; align-items: end; }
+.invested-bar-wrap { height: 60px; display: flex; align-items: flex-end; }
+.invested-bar { width: 100%; background: var(--green); border-radius: 3px 3px 0 0; min-height: 2px; }
+.invested-month-name { font-size: 10px; color: var(--text-muted); text-align: center; margin-top: 4px; }
+.invested-note { font-size: 11px; color: var(--text-muted); margin-top: 12px; }

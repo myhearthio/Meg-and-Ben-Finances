@@ -544,7 +544,7 @@ function KpiRow({ snap, nw }) {
       <div className="kpi-card">
         <div className="kpi-label">Investing rate</div>
         <div className="kpi-value">{nw && nw.invest_rate != null ? (nw.invest_rate * 100).toFixed(1) + "%" : "\u2026"}</div>
-        <div className="kpi-sub">Invested \u00f7 income</div>
+        <div className="kpi-sub">{"Invested \u00f7 income"}</div>
       </div>
     </div>
   );

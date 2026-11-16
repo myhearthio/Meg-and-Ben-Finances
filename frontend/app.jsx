@@ -249,7 +249,7 @@ function TopBar({ refreshedAt, onRefresh, plaidStatus, tab, onTabChange, year, o
   return (
     <div className="topbar">
       <div className="topbar-left">
-        <span className="brand">Meg & Ben Finance<span className="brand-sub">family CFO</span></span>
+        <span className="brand">Meg & Ben Finance</span>
         <div className="tabs">
           {topTabs.map(t => (
             <div key={t.key} className={"tab" + (t.active ? " active" : "")}
@@ -266,7 +266,7 @@ function TopBar({ refreshedAt, onRefresh, plaidStatus, tab, onTabChange, year, o
         )}
       </div>
       {tab !== "todos" && tab !== "work" && <div className="topbar-right">
-        <div className="year-switch">
+        {tab === "dashboard" && <div className="year-switch">
           {[2025, 2026].map(y => (
             <button
               key={y}
@@ -274,13 +274,11 @@ function TopBar({ refreshedAt, onRefresh, plaidStatus, tab, onTabChange, year, o
               onClick={() => onYearChange(y)}
             >{y}</button>
           ))}
-        </div>
-        <span className="status-text">
+        </div>}
+        <button className="refresh-btn" onClick={onRefresh}
+                title={(plaidStatus.connected ? "Banks connected" : "Banks not connected") + " - click to refresh"}>
           <span className={"status-dot " + (plaidStatus.connected ? "status-on" : "status-off")}></span>
-          Plaid {plaidStatus.connected ? "connected" : "not connected"}
-        </span>
-        <button className="refresh-btn" onClick={onRefresh}>
-          {refreshedAt ? "Refreshed " + refreshedAt.toLocaleTimeString() : "Refresh"}
+          {refreshedAt ? "Updated " + refreshedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "Refresh"}
         </button>
       </div>}
     </div>
@@ -324,18 +322,19 @@ function ErrorScreen({ err, onRetry }) {
   );
 }
 
+// Friendly account names by last-4 (Plaid/CSV names are bank defaults like "Zach Checking").
+const ACCOUNT_NAMES = {
+  "0485": "Ben checking",
+  "5538": "Ben credit card",
+  "6002": "Megan checking",
+  "4547": "Megan credit card",
+  "0328": "Household card (Zach)",
+};
 function Sidebar({ snap, plaidStatus, onPlaidChanged }) {
-  const cash = snap.kpis?.cash_on_hand ?? 0;
   const accounts = snap.cash_accounts || [];
+  const items = plaidStatus.items || [];
   return (
     <div className="sidebar">
-      <div className="sidebar-block">
-        <div className="cash-card">
-          <div className="cash-label">Cash on Hand</div>
-          <div className="cash-amount">{fmt(cash)}</div>
-        </div>
-      </div>
-
       <div className="sidebar-block">
         <div className="sidebar-label">Accounts</div>
         {accounts.length === 0 && (
@@ -346,17 +345,18 @@ function Sidebar({ snap, plaidStatus, onPlaidChanged }) {
         {accounts.map((a, i) => (
           <div key={i} className="account-row">
             <div>
-              <div className="account-name">{a.name}</div>
-              <div className="account-name-sub">{a.subtype || a.kind} · {a.mask}</div>
+              <div className="account-name">{ACCOUNT_NAMES[a.mask] || a.name}</div>
+              <div className="account-name-sub">{a.kind === "credit" ? "Card" : "Checking"} {"\u00b7\u00b7"}{a.mask}</div>
             </div>
-            <div className={"account-bal" + (a.balance < 0 ? " negative" : "")}>{fmt(a.balance)}</div>
+            {/* CSV-only accounts have no live balance; show a dash rather than a misleading $0 */}
+            <div className={"account-bal" + (a.balance < 0 ? " negative" : "")}>{/\(CSV\)/.test(a.name || "") && !a.balance ? "\u2014" : fmt(a.balance)}</div>
           </div>
         ))}
       </div>
 
-      <div className="sidebar-block">
-        <div className="sidebar-label">Connected banks</div>
-        {(plaidStatus.items || []).length === 0 && (
+      <details className="sidebar-block sidebar-banks">
+        <summary className="sidebar-label">Bank connections ({items.length})</summary>
+        {items.length === 0 && (
           <div style={{ fontSize: 12, color: "#888", padding: "4px 0 8px" }}>
             No banks linked yet.
           </div>
@@ -382,8 +382,8 @@ function Sidebar({ snap, plaidStatus, onPlaidChanged }) {
             >Remove</button>
           </div>
         ))}
-        <PlaidConnectButton hasItems={(plaidStatus.items || []).length > 0} onChanged={onPlaidChanged} />
-      </div>
+        <PlaidConnectButton hasItems={items.length > 0} onChanged={onPlaidChanged} />
+      </details>
     </div>
   );
 }
@@ -471,26 +471,22 @@ function KpiRow({ snap }) {
   return (
     <div className="kpi-row">
       <div className="kpi-card">
-        <div className="kpi-label">Cash on Hand</div>
-        <div className="kpi-value">{fmt(k.cash_on_hand)}</div>
-      </div>
-      <div className="kpi-card">
         <div className="kpi-label">Income YTD</div>
-        <div className="kpi-value green">{fmt(k.income_ytd)}</div>
+        <div className="kpi-value">{fmt(k.income_ytd)}</div>
         <div className="kpi-sub">{snap.counts?.income_deposits || 0} deposits</div>
       </div>
       <div className="kpi-card">
         <div className="kpi-label">Expenses YTD</div>
-        <div className="kpi-value red">{fmt(k.expenses_ytd)}</div>
+        <div className="kpi-value">{fmt(k.expenses_ytd)}</div>
         <div className="kpi-sub">{snap.counts?.expense_charges || 0} charges</div>
       </div>
       <div className="kpi-card">
         <div className="kpi-label">Net Saved YTD</div>
-        <div className={"kpi-value " + ((k.net_saved_ytd || 0) >= 0 ? "blue" : "red")}>{fmt(k.net_saved_ytd)}</div>
+        <div className={"kpi-value " + ((k.net_saved_ytd || 0) >= 0 ? "green" : "red")}>{fmt(k.net_saved_ytd)}</div>
       </div>
       <div className="kpi-card">
         <div className="kpi-label">Savings Rate</div>
-        <div className={"kpi-value " + ((k.savings_rate_pct || 0) >= 0 ? "blue" : "red")}>{fmtPct(k.savings_rate_pct)}</div>
+        <div className={"kpi-value " + ((k.savings_rate_pct || 0) >= 0 ? "" : "red")}>{fmtPct(k.savings_rate_pct)}</div>
       </div>
     </div>
   );
@@ -1155,7 +1151,8 @@ function ApprovalRow({ tx, cat, vendorPending, onCatChange, onApprove, onApprove
       <div className="approval-row-date">{fmtDate(tx.date)}</div>
       <div className="approval-row-vendor">
         <EditableText value={tx.vendorName} onSave={onRenameVendor} className="approval-row-name" />
-        <EditableText value={tx.desc} onSave={onRenameTx} className="approval-row-desc" />
+        {String(tx.desc || "").trim().toUpperCase() !== String(tx.vendorName || "").trim().toUpperCase() &&
+          <EditableText value={tx.desc} onSave={onRenameTx} className="approval-row-desc" />}
       </div>
       <div className="approval-row-amount">{fmt(tx.amount)}</div>
       <select className="approval-row-select" value={cat || "other"} onChange={e => onCatChange(e.target.value)}>
@@ -2024,7 +2021,8 @@ function IncomeApprovalRow({ tx, cat, onCatChange, onApprove, onRenameVendor, on
       <div className="approval-row-date">{fmtTxDate(tx.date)}</div>
       <div className="approval-row-vendor">
         <EditableText value={tx.vendorName} onSave={onRenameVendor} className="approval-row-name" />
-        <EditableText value={tx.desc} onSave={onRenameTx} className="approval-row-desc" />
+        {String(tx.desc || "").trim().toUpperCase() !== String(tx.vendorName || "").trim().toUpperCase() &&
+          <EditableText value={tx.desc} onSave={onRenameTx} className="approval-row-desc" />}
       </div>
       <div className="approval-row-amount" style={{ color: "#1a7f37" }}>{fmt(tx.amount)}</div>
       <select className="approval-row-select" value={cat} onChange={e => onCatChange(e.target.value)}>
@@ -2091,7 +2089,7 @@ function InvestmentsView() {
   }).length;
 
   return (
-    <div>
+    <div className="main">
       <div className="inv-header">
         <div>
           <div className="page-title">Investments</div>
@@ -2371,7 +2369,7 @@ function InvestmentRow({ row, onChange, total }) {
         {(() => {
           const d = daysSince(row.updated_at);
           if (d == null) return <span className="inv-stale-badge">never updated</span>;
-          if (d >= STALE_DAYS) return <span className="inv-stale-badge">{d}d old — refresh</span>;
+          if (d >= STALE_DAYS) return <span className="inv-stale-badge">Updated {Math.round(d / 30)} mo ago</span>;
           return <span>Updated {new Date(row.updated_at).toLocaleDateString()}</span>;
         })()}
         {row.last_pdf_as_of && <span>· Statement as of {row.last_pdf_as_of}</span>}

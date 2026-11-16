@@ -280,3 +280,11 @@ When you change something material, append a dated note at the bottom.
 - Fix: moved the `mergedByCategory` IIFE declaration UP, above `rawActual`/`actualByCat`/`actualGrand`. One declaration only now.
 - Lesson: `const`/`let` are NOT hoisted like `var` — using one before its declaration line throws, even inside a closure that's called later in the same render. Declare derived values before the code that consumes them.
 - Deploy: commit `f46c0c5`, verified live via `/api/version`.
+
+### 2026-11-16 — Invested card, Rockefeller xlsx upload, UI polish, Avenir font, new net-worth hero
+- **Saved = invested** (Ben's definition). `GET /api/invested?year=` buckets already-Excluded expense tx matching `NATL FIN SVC` (Rockefeller's clearing firm) and `BRIGHTDIRECTIONS` (529s). Earnest money, card payments, own-account transfers NOT counted (Ben). Shown as "Invested in YEAR" card atop Budget, and as Invested YTD / Investing rate (invested ÷ income) on Dashboard. Expense totals untouched.
+- **Rockefeller refresh** = drop `AccountTypeDetailsReport.xlsx` (Holdings → download icon) on the Rockefeller row. Parsed in-browser with SheetJS (cdnjs xlsx 0.18.5): sum of Value by Account, skipping rows with no Account (Logan Blvd external, $3M value / $1.5M mortgage) and `***0485` (Benny Checking). Per-account breakdown saved in the row note. 529s (accounts ending 5513/5517/5483) are NOT in that export; balances come from Caitlin Dahl (Rockefeller) by message.
+- **Net worth hero**: `GET /api/networth` splits the same total (investment rows + cash − cards) into Investments / Real estate / 529s / Vehicles / Cash, each with as-of dates; logs one point per day in kv `networth-history` (history starts 2026-11-16; no backfill possible).
+- **UI**: one-line top bar, friendly account names (`ACCOUNT_NAMES` by mask in app.jsx), bank connections collapsed, duplicate Cash on Hand removed. **Font = Avenir Next** everywhere (the Acorns face; Nunito Sans fallback via Google Fonts) — Ben chose it; he rejected 10 proposed palette/font schemes, wants to steer the look from his own reference screenshots.
+- Still open: retirement target (for a progress line), Ben checking 0485 shows −$3,509 from Plaid vs $2,456 at Rockefeller, repo is PUBLIC with PIN + Hollis key (Ben declined to prioritize).
+- Deploys: `27707f5`, `9962543`, `45fdbdf`, `c9787f6`, `428e0b7`, `c085649`.

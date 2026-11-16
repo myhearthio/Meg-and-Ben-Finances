@@ -791,6 +791,54 @@ app.get("/api/invested", async (req, res) => {
   catch (e) { console.log("invested err:", e); res.status(500).json({ error: e.message }); }
 });
 
+// ---- Net worth breakdown for the Dashboard hero (2026-11-16) ----
+// Same total as kpis.net_worth (investment rows + cash - cards), split into groups so the
+// hero can show what it is made of and how old each number is. Every call also records
+// today's net worth in kv "networth-history" so a trend builds up from here on.
+const NW_GROUPS = [
+  { key: "real_estate", label: "Real estate", match: /equity|albany|logan|francisco|armitage|milwaukee|wabansia/i },
+  { key: "education", label: "529s", match: /529/ },
+  { key: "vehicles", label: "Vehicles", match: /genesis|minivan|vehicle|\bcar\b/i },
+  { key: "investments", label: "Investments", match: /./ },
+];
+const NW_HISTORY_KEY = "networth-history";
+async function _buildNetWorth(year) {
+  const snap = await getSnapshot(false);
+  const list = (await db.kvGet(INVESTMENTS_KEY, [])) || [];
+  const groups = NW_GROUPS.map(g => ({ key: g.key, label: g.label, total: 0, count: 0, newest: null, oldest: null }));
+  for (const row of list) {
+    const gi = NW_GROUPS.findIndex(g => g.match.test(String(row.name || "")));
+    const g = groups[gi];
+    g.total += Number(row.value) || 0; g.count += 1;
+    const d = String(row.updated_at || "").slice(0, 10) || null;
+    if (d && (!g.newest || d > g.newest)) g.newest = d;
+    if (!d || !g.oldest || d < g.oldest) g.oldest = d || g.oldest;
+  }
+  const accts = snap.cash_accounts || [];
+  const cash = accts.filter(a => a.kind === "depository").reduce((n, a) => n + (Number(a.balance) || 0), 0);
+  const cards = accts.filter(a => a.kind === "credit").reduce((n, a) => n + (Number(a.owed) || 0), 0);
+  const assets = groups.reduce((n, g) => n + g.total, 0) + Math.max(0, cash);
+  const netWorth = Math.round((groups.reduce((n, g) => n + g.total, 0) + cash - cards) * 100) / 100;
+  const inv = await _buildInvested(year || snap.year);
+  const income = Number(snap.kpis?.income_ytd) || 0;
+  // Record today's value (one point per day, last write wins) and return the series.
+  const today = new Date().toISOString().slice(0, 10);
+  let history = (await db.kvGet(NW_HISTORY_KEY, {})) || {};
+  if (history[today] !== netWorth) { history[today] = netWorth; await db.kvSet(NW_HISTORY_KEY, history); }
+  const series = Object.keys(history).sort().map(d => ({ date: d, value: history[d] }));
+  return {
+    as_of: today, net_worth: netWorth, assets: Math.round(assets), cash: Math.round(cash), cards: Math.round(cards),
+    groups: groups.filter(g => g.count).map(g => ({ ...g, total: Math.round(g.total) })),
+    invested_ytd: Math.round(inv.total), income_ytd: Math.round(income),
+    invest_rate: income > 0 ? inv.total / income : null,
+    history: series,
+  };
+}
+app.get("/api/networth", async (req, res) => {
+  try { res.json(await _buildNetWorth(req.query.year ? String(req.query.year) : null)); }
+  catch (e) { console.log("networth err:", e); res.status(500).json({ error: e.message }); }
+});
+
 app.post("/api/actuals", async (req, res) => {
   try {
     const body = req.body || {};

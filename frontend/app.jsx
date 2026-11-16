@@ -429,44 +429,100 @@ function Main({ snap, tab }) {
 }
 
 function Dashboard({ snap }) {
+  const [nw, setNw] = useState(null);
+  useEffect(() => {
+    fetch("/api/networth?year=" + snap.year).then(r => r.json()).then(j => { if (!j.error) setNw(j); }).catch(() => {});
+  }, [snap.year]);
   return (
     <div className="main">
       <div className="page-title">Dashboard</div>
       <div className="page-subtitle">As of {snap.as_of_date} · year {snap.year}</div>
-      <NetWorthHero snap={snap} />
-      <KpiRow snap={snap} />
+      <NetWorthHero snap={snap} nw={nw} />
+      <KpiRow snap={snap} nw={nw} />
       <MonthlyCharts snap={snap} />
     </div>
   );
 }
 
-function NetWorthHero({ snap }) {
-  const k = snap.kpis || {};
-  const cash = k.cash_on_hand || 0;
-  const inv = k.investments_total || 0;
-  const nw = k.net_worth ?? (cash + inv);
+// Hero (rebuilt 2026-11-16): what you're worth, what it's made of, how fresh each piece is,
+// and what you've invested this year. Breakdown comes from /api/networth.
+const NW_COLORS = { investments: "#8CC5A6", real_estate: "#D8C08E", education: "#9FB9DA", vehicles: "#8E9099", cash: "#E6E6E2" };
+const fmtShort = (n) => {
+  const a = Math.abs(n), s = n < 0 ? "-" : "";
+  if (a >= 1e6) return s + "$" + (a / 1e6).toFixed(2) + "M";
+  if (a >= 1e3) return s + "$" + Math.round(a / 1e3) + "K";
+  return s + "$" + Math.round(a);
+};
+const fmtAsOf = (d) => { if (!d) return "never"; const p = d.split("-"); return Number(p[1]) + "/" + Number(p[2]); };
+function NwSpark({ points }) {
+  if (!points || points.length < 2) return null;
+  const W = 220, H = 56, vals = points.map(p => p.value);
+  const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+  const xy = points.map((p, i) => [i / (points.length - 1) * W, H - 4 - (p.value - lo) / span * (H - 8)]);
+  const d = xy.map((q, i) => (i ? "L" : "M") + q[0].toFixed(1) + " " + q[1].toFixed(1)).join(" ");
+  const last = xy[xy.length - 1];
   return (
-    <div className="nw-hero">
-      <div className="nw-hero-main">
-        <div className="nw-hero-label">Net Worth</div>
-        <div className="nw-hero-value">{fmt(nw)}</div>
-      </div>
-      <div className="nw-hero-breakdown">
-        <div className="nw-hero-part">
-          <div className="nw-hero-part-label">Investments</div>
-          <div className="nw-hero-part-value">{fmt(inv)}</div>
+    <svg className="nw-spark" viewBox={"0 0 " + W + " " + H} role="img" aria-label="Net worth trend">
+      <path d={d + " L" + W + " " + H + " L0 " + H + " Z"} fill="rgba(140,197,166,0.14)" />
+      <path d={d} fill="none" stroke="#8CC5A6" strokeWidth="2" strokeLinejoin="round" />
+      <circle cx={last[0]} cy={last[1]} r="3.5" fill="#8CC5A6" />
+    </svg>
+  );
+}
+function NetWorthHero({ snap, nw }) {
+  const k = snap.kpis || {};
+  const total = nw ? nw.net_worth : (k.net_worth ?? 0);
+  const hist = (nw && nw.history) || [];
+  const first = hist[0], change = hist.length > 1 ? total - first.value : null;
+  const parts = nw ? [...nw.groups.map(g => ({ key: g.key, label: g.label, value: g.total, asOf: g.oldest }))
+                     .sort((a, b) => b.value - a.value),
+                     { key: "cash", label: "Cash", value: Math.max(0, nw.cash), asOf: nw.as_of }] : [];
+  const assets = parts.reduce((n, p) => n + p.value, 0) || 1;
+  const stale = (d) => d && (Date.now() - new Date(d + "T12:00:00").getTime()) / 864e5 > 45;
+  return (
+    <div className="nw-hero2">
+      <div className="nw2-top">
+        <div className="nw2-main">
+          <div className="nw-hero-label">Net worth</div>
+          <div className="nw2-value">{fmt(total)}</div>
+          <div className="nw2-change">
+            {change == null
+              ? "Trend tracking started " + fmtAsOf(nw ? nw.as_of : snap.as_of_date) + ". A line builds from here."
+              : <span className={change >= 0 ? "up" : "down"}>{(change >= 0 ? "Up " : "Down ") + fmt(Math.abs(change)) + " since " + fmtAsOf(first.date)}</span>}
+          </div>
         </div>
-        <div className="nw-hero-plus">+</div>
-        <div className="nw-hero-part">
-          <div className="nw-hero-part-label">Cash − Credit</div>
-          <div className={"nw-hero-part-value " + (cash >= 0 ? "" : "red")}>{fmt(cash)}</div>
-        </div>
+        <NwSpark points={hist} />
       </div>
+      {nw && (
+        <>
+          <div className="nw2-bar" role="img" aria-label="What net worth is made of">
+            {parts.filter(p => p.value > 0).map(p => (
+              <span key={p.key} style={{ width: (p.value / assets * 100) + "%", background: NW_COLORS[p.key] || "#ccc" }} title={p.label + " " + fmt(p.value)} />
+            ))}
+          </div>
+          <div className="nw2-legend">
+            {parts.filter(p => p.value > 0).map(p => (
+              <div key={p.key} className="nw2-leg">
+                <span className="nw2-dot" style={{ background: NW_COLORS[p.key] || "#ccc" }} />
+                <span className="nw2-leg-label">{p.label}</span>
+                <span className="nw2-leg-val">{fmtShort(p.value)}</span>
+                <span className={"nw2-leg-asof" + (stale(p.asOf) ? " stale" : "")}>{stale(p.asOf) ? "oldest " + fmtAsOf(p.asOf) : "as of " + fmtAsOf(p.asOf)}</span>
+              </div>
+            ))}
+            <div className="nw2-leg">
+              <span className="nw2-dot minus">&minus;</span>
+              <span className="nw2-leg-label">Card balances</span>
+              <span className="nw2-leg-val">{fmtShort(-nw.cards)}</span>
+              <span className="nw2-leg-asof">as of {fmtAsOf(nw.as_of)}</span>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
-function KpiRow({ snap }) {
+function KpiRow({ snap, nw }) {
   const k = snap.kpis || {};
   return (
     <div className="kpi-row">
@@ -481,12 +537,14 @@ function KpiRow({ snap }) {
         <div className="kpi-sub">{snap.counts?.expense_charges || 0} charges</div>
       </div>
       <div className="kpi-card">
-        <div className="kpi-label">Net Saved YTD</div>
-        <div className={"kpi-value " + ((k.net_saved_ytd || 0) >= 0 ? "green" : "red")}>{fmt(k.net_saved_ytd)}</div>
+        <div className="kpi-label">Invested YTD</div>
+        <div className="kpi-value green">{nw ? fmt(nw.invested_ytd) : "\u2026"}</div>
+        <div className="kpi-sub">Rockefeller + 529s</div>
       </div>
       <div className="kpi-card">
-        <div className="kpi-label">Savings Rate</div>
-        <div className={"kpi-value " + ((k.savings_rate_pct || 0) >= 0 ? "" : "red")}>{fmtPct(k.savings_rate_pct)}</div>
+        <div className="kpi-label">Investing rate</div>
+        <div className="kpi-value">{nw && nw.invest_rate != null ? (nw.invest_rate * 100).toFixed(1) + "%" : "\u2026"}</div>
+        <div className="kpi-sub">Invested \u00f7 income</div>
       </div>
     </div>
   );
